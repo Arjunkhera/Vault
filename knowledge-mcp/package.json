@@ -1,0 +1,31 @@
+{
+  "name": "@fdp-docmgmt/knowledge-mcp",
+  "version": "0.1.0",
+  "description": "MCP thin client for Knowledge Service",
+  "type": "module",
+  "bin": {
+    "knowledge-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "knowledge-service",
+    "anvil"
+  ],
+  "author": "FDP DocMgmt",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
