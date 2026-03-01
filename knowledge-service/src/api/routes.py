@@ -18,7 +18,7 @@ Write path (5 operations):
 
 import asyncio
 import logging
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends
 from typing import Annotated
 
 from ..layer1.interface import SearchStore
@@ -35,6 +35,7 @@ from ..layer2.link_navigator import get_related_pages
 from ..layer2.schema import SchemaLoader, PageValidator, RegistryEntry
 from ..layer2.suggester import MetadataSuggester
 from ..layer2.dedup import DuplicateChecker
+from ..errors import not_found, parse_error, schema_not_loaded, internal_error, registry_not_found, duplicate_entry
 from .models import (
     ResolveContextRequest,
     ResolveContextResponse,
@@ -205,7 +206,7 @@ def _get_page_sync(request: GetPageRequest, store: SearchStore):
     content = store.get_document(request.id)
 
     if not content:
-        return None
+        raise not_found("Page", request.id)
 
     parsed = parse_page(content)
     return to_page_full(parsed, request.id)
@@ -214,12 +215,7 @@ def _get_page_sync(request: GetPageRequest, store: SearchStore):
 @router.post("/get-page", response_model=PageFull)
 async def get_page(request: GetPageRequest, store: StoreDepends):
     """Retrieve a full page by its identifier (file path or title)."""
-    result = await asyncio.to_thread(_get_page_sync, request, store)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Page not found: {request.id}")
-
-    return result
+    return await asyncio.to_thread(_get_page_sync, request, store)
 
 
 def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
@@ -227,7 +223,7 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
     content = store.get_document(request.id)
 
     if not content:
-        return None
+        raise not_found("Page", request.id)
 
     parsed = parse_page(content)
     source_summary = to_page_summary(parsed, request.id)
@@ -244,12 +240,7 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
 @router.post("/get-related", response_model=GetRelatedResponse)
 async def get_related(request: GetRelatedRequest, store: StoreDepends):
     """Follow links from a page to find related pages."""
-    result = await asyncio.to_thread(_get_related_sync, request, store)
-
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Page not found: {request.id}")
-
-    return result
+    return await asyncio.to_thread(_get_related_sync, request, store)
 
 
 def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore):
@@ -299,17 +290,16 @@ def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader):
     """Synchronous implementation of validate-page."""
     import frontmatter as fm
 
+    if not loader.page_types:
+        raise schema_not_loaded("Schema has no page types loaded")
+
     try:
         post = fm.loads(request.content)
         metadata = dict(post.metadata)
     except Exception as e:
-        return ValidatePageResponse(
-            valid=False,
-            errors=[ValidationErrorModel(
-                field="frontmatter",
-                message=f"Failed to parse YAML frontmatter: {e}",
-                action_required="fix_format",
-            )],
+        raise parse_error(
+            f"Failed to parse YAML frontmatter: {e}",
+            {"error_type": type(e).__name__}
         )
 
     validator = PageValidator(loader)
@@ -347,6 +337,9 @@ async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepend
 
 def _suggest_metadata_sync(request: SuggestMetadataRequest, loader: SchemaLoader, store: SearchStore):
     """Synchronous implementation of suggest-metadata."""
+    if not loader.page_types:
+        raise schema_not_loaded("Schema has no page types loaded")
+
     suggester = MetadataSuggester(loader, store=store)
     result = suggester.suggest(request.content, hints=request.hints)
     return result.to_dict()
@@ -374,9 +367,13 @@ async def suggest_metadata(
 
 def _check_duplicates_sync(request: CheckDuplicatesRequest, store: SearchStore):
     """Synchronous implementation of check-duplicates."""
-    checker = DuplicateChecker(store)
-    threshold = request.threshold if request.threshold is not None else 0.75
-    return checker.check(request.title, request.content, threshold=threshold)
+    try:
+        checker = DuplicateChecker(store)
+        threshold = request.threshold if request.threshold is not None else 0.75
+        return checker.check(request.title, request.content, threshold=threshold)
+    except Exception as e:
+        logger.error("Duplicate check failed: %s", e, exc_info=True)
+        raise internal_error(f"Duplicate check failed: {e}")
 
 
 @router.post("/check-duplicates", response_model=CheckDuplicatesResponse)
@@ -407,6 +404,8 @@ async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends)
 
 def _get_schema_sync(loader: SchemaLoader):
     """Synchronous implementation of get-schema."""
+    if not loader.page_types:
+        raise schema_not_loaded("Schema has no page types loaded")
     return loader.get_schema()
 
 
@@ -424,6 +423,18 @@ async def get_schema_endpoint(loader: SchemaLoaderDepends):
 
 def _registry_add_sync(request: RegistryAddRequest, loader: SchemaLoader):
     """Synchronous implementation of registry/add."""
+    if not loader.registries:
+        raise schema_not_loaded("Schema has no registries loaded")
+
+    registry = loader.get_registry(request.registry)
+    if registry is None:
+        raise registry_not_found(request.registry)
+
+    # Check for duplicate entry
+    existing = next((e for e in registry if e.id == request.entry.id), None)
+    if existing is not None:
+        raise duplicate_entry(request.registry, request.entry.id)
+
     entry = RegistryEntry(
         id=request.entry.id,
         description=request.entry.description or "",
@@ -434,7 +445,7 @@ def _registry_add_sync(request: RegistryAddRequest, loader: SchemaLoader):
     try:
         loader.add_registry_entry(request.registry, entry)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise internal_error(str(e))
 
     total = len(loader.get_registry(request.registry))
     logger.info("Registry '%s': added '%s' (total: %d)", request.registry, entry.id, total)
