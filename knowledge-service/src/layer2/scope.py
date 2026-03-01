@@ -10,7 +10,7 @@ Replaces the v1 five-level hierarchy (company/org/squad/service/repo).
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Iterator, Optional
 
 from ..layer1.interface import SearchStore
 from .frontmatter import parse_page, ParsedPage
@@ -30,7 +30,7 @@ class Scope:
     program: Optional[str] = None
     repo: Optional[str] = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str]:
         """Convert to dict for API responses, excluding None values."""
         return {k: v for k, v in {
             "program": self.program,
@@ -106,11 +106,15 @@ def collect_operational_pages(
     applicable: list[tuple[ParsedPage, str, int]] = []
 
     if doc_cache is not None:
-        items: object = doc_cache.items()
+        items: Iterator[tuple[str, str]] = iter(doc_cache.items())
     else:
-        items = ((p, store.get_document(p)) for p in store.list_documents())
+        # Generator that yields tuples with potentially None content
+        def gen_items() -> Iterator[tuple[str, Optional[str]]]:
+            for p in store.list_documents():
+                yield p, store.get_document(p)
+        items = gen_items()  # type: ignore[assignment]
 
-    for path, content in items:  # type: ignore[union-attr]
+    for path, content in items:  # type: ignore[misc]
         if not content:
             continue
 
@@ -154,7 +158,7 @@ def _calculate_specificity(page: ParsedPage, scope: Scope) -> int:
     return 0
 
 
-def _applies_to_repo(applies_to: list, repo: str) -> bool:
+def _applies_to_repo(applies_to: list[Any], repo: str) -> bool:
     """Check if the applies_to field references the given repo."""
     for item in applies_to:
         if isinstance(item, dict):

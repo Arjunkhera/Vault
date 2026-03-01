@@ -1,0 +1,9 @@
+entries:
+  - id: vault
+    description: "Vault knowledge service"
+  - id: anvil
+    description: "Anvil task and note management"
+  - id: forge
+    description: "Forge agent tooling"
+  - id: broken
+    description: "Broken test repo"
