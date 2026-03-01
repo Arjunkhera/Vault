@@ -1,0 +1,56 @@
+# Base field definitions shared by all page types.
+# Every page implicitly has these fields.
+
+id: _base
+name: Base Page
+description: "Common fields inherited by all knowledge page types"
+fields:
+  title:
+    required: true
+    description: "Human/agent readable title"
+  description:
+    required: true
+    min_length: 10
+    max_length: 300
+    description: "~150 char agent-optimized summary for progressive disclosure"
+  type:
+    required: true
+    values:
+      - repo-profile
+      - guide
+      - concept
+      - procedure
+      - keystone
+      - learning
+    description: "Page type identifier"
+  mode:
+    required: true
+    values:
+      - reference
+      - operational
+      - keystone
+    description: "How the service delivers this page: reference (search), operational (auto-injected), keystone (navigation hub)"
+  scope:
+    required: false
+    description: "Scope object with optional program and repo keys"
+  tags:
+    required: false
+    description: "Free-form tags for search and filtering"
+  owner:
+    required: false
+    description: "Person or team responsible for this page"
+  last-verified:
+    required: false
+    description: "Date when this page was last confirmed accurate (YYYY-MM-DD)"
+  related:
+    required: false
+    description: "Wiki-links to related knowledge pages"
+  depends-on:
+    required: false
+    description: "Upstream dependencies"
+  consumed-by:
+    required: false
+    description: "Downstream consumers"
+  applies-to:
+    required: false
+    description: "Cross-cutting: repos this page applies to"

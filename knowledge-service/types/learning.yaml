@@ -1,0 +1,27 @@
+id: learning
+name: Learning
+description: "Post-mortem, edge case discovery, bug analysis, lessons learned"
+required_scope: []
+fields: {}
+template: |
+  ---
+  type: learning
+  title: ""
+  description: ""
+  scope:
+    program: ""
+  tags: []
+  mode: reference
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Learning Title
+
+  ## Context
+
+  ## What Happened
+
+  ## Root Cause
+
+  ## Lessons

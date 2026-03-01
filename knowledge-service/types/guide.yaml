@@ -1,0 +1,25 @@
+id: guide
+name: Guide
+description: "How to do something — setup, integration, workflow, onboarding"
+required_scope: []
+fields: {}
+template: |
+  ---
+  type: guide
+  title: ""
+  description: ""
+  scope:
+    program: ""
+  tags: []
+  mode: reference
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Guide Title
+
+  ## Prerequisites
+
+  ## Steps
+
+  ## Troubleshooting

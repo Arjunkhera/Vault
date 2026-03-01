@@ -100,8 +100,8 @@ def _extract_reference_text(ref) -> Optional[str]:
         return ref.strip()
     
     elif isinstance(ref, dict):
-        # Extract value from dict refs like {"repo": "name"} or {"service": "name"}
-        for key in ["repo", "service", "squad", "org", "company"]:
+        # Extract value from dict refs like {"repo": "name"} or {"program": "name"}
+        for key in ["repo", "program"]:
             if key in ref:
                 return ref[key]
     

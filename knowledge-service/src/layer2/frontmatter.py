@@ -40,9 +40,7 @@ class ParsedPage:
     # Metadata
     owner: Optional[str] = None
     last_verified: Optional[str] = None
-    auto_generated: Optional[bool] = None
-    source: Optional[str] = None
-    
+
     # Content
     body: str = ""
 
@@ -59,23 +57,23 @@ def parse_page(content: str) -> ParsedPage:
         
     Example:
         >>> content = '''---
-        ... type: service-overview
-        ... title: Document Service
-        ... description: Core document management service
+        ... type: repo-profile
+        ... title: Anvil
+        ... description: Personal task and note management system
         ... scope:
-        ...   org: DME
-        ...   service: Document Service
+        ...   program: anvil-forge-vault
+        ...   repo: anvil
         ... mode: reference
         ... tags: [core, backend]
         ... ---
-        ... # Document Service
+        ... # Anvil
         ... This is the body content.
         ... '''
         >>> page = parse_page(content)
         >>> page.title
-        'Document Service'
-        >>> page.scope['org']
-        'DME'
+        'Anvil'
+        >>> page.scope['program']
+        'anvil-forge-vault'
     """
     # Parse frontmatter using python-frontmatter library
     post = frontmatter.loads(content)
@@ -97,8 +95,6 @@ def parse_page(content: str) -> ParsedPage:
         applies_to=metadata.get("applies-to", []),
         owner=metadata.get("owner"),
         last_verified=metadata.get("last-verified"),
-        auto_generated=metadata.get("auto-generated"),
-        source=metadata.get("source"),
         body=post.content  # Body content without frontmatter
     )
 
@@ -168,6 +164,4 @@ def to_page_full(parsed: ParsedPage, file_path: str) -> PageFull:
         applies_to=parsed.applies_to,
         owner=parsed.owner,
         last_verified=last_verified_str,
-        auto_generated=parsed.auto_generated,
-        source=parsed.source
     )

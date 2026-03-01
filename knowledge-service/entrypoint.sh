@@ -1,20 +1,27 @@
 #!/bin/bash
 set -e
 
-# Clone knowledge repo if not already present (skip if SKIP_GIT_CLONE is set)
-if [ "$SKIP_GIT_CLONE" != "true" ]; then
+# Clone knowledge repo if KNOWLEDGE_REPO_URL is set and repo not already present
+if [ -n "$KNOWLEDGE_REPO_URL" ] && [ "$SKIP_GIT_CLONE" != "true" ]; then
     if [ ! -d "/data/knowledge-repo/.git" ]; then
-        echo "Cloning knowledge repo..."
-        git clone "https://${GITHUB_TOKEN}@github.intuit.com/${KNOWLEDGE_REPO:-fdp-docmgmt/knowledge-base}.git" /data/knowledge-repo
+        echo "Cloning knowledge repo from ${KNOWLEDGE_REPO_URL}..."
+        if [ -n "$GITHUB_TOKEN" ]; then
+            # Insert token into URL for auth (supports github.com URLs)
+            AUTH_URL=$(echo "$KNOWLEDGE_REPO_URL" | sed "s|https://|https://${GITHUB_TOKEN}@|")
+            git clone "$AUTH_URL" /data/knowledge-repo
+        else
+            git clone "$KNOWLEDGE_REPO_URL" /data/knowledge-repo
+        fi
     fi
-else
+elif [ "$SKIP_GIT_CLONE" = "true" ]; then
     echo "Skipping git clone (SKIP_GIT_CLONE=true)"
 fi
 
-# Verify knowledge repo exists
+# Verify knowledge repo exists (could be volume-mounted)
 if [ ! -d "/data/knowledge-repo" ]; then
-    echo "ERROR: Knowledge repo not found at /data/knowledge-repo"
-    exit 1
+    echo "WARNING: Knowledge repo not found at /data/knowledge-repo"
+    echo "Creating empty directory — mount a volume or set KNOWLEDGE_REPO_URL"
+    mkdir -p /data/knowledge-repo
 fi
 
 # Start the Python service (sync daemon runs as background tasks inside the app)

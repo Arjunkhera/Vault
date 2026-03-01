@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Knowledge Service MCP Thin Client
- * 
+ * Vault Knowledge Service MCP Thin Client
+ *
  * A Model Context Protocol (MCP) server that provides a thin client interface
- * to the Knowledge Service REST API. Translates MCP tool calls into HTTP requests.
+ * to the Vault Knowledge Service REST API. Translates MCP tool calls into HTTP requests.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -59,21 +59,26 @@ async function callKnowledgeAPI(path: string, body: unknown): Promise<unknown> {
 }
 
 /**
- * Tool definitions matching the Knowledge Service REST API
+ * Tool definitions matching the Vault Knowledge Service REST API.
+ *
+ * Two-level scope: program (ties related repos) + repo (individual repository).
+ * Six page types: repo-profile, guide, concept, procedure, keystone, learning.
+ * Three modes: reference, operational, keystone.
  */
 const TOOLS: Tool[] = [
   {
     name: "knowledge_resolve_context",
     description:
-      "Resolve the full scope chain for a repository and return all applicable operational pages. " +
-      "This is the primary entry point for getting context about a codebase - it returns procedures, " +
-      "guides, and conventions that apply to the repo, its service, squad, org, and company.",
+      "Resolve the scope for a repository and return all applicable operational pages. " +
+      "This is the primary entry point for getting context about a codebase — it finds the " +
+      "repo-profile page, resolves which program the repo belongs to, and returns procedures, " +
+      "guides, and conventions that apply at the repo and program level.",
     inputSchema: {
       type: "object",
       properties: {
         repo: {
           type: "string",
-          description: "Repository name (e.g., 'document-service')",
+          description: "Repository name (e.g., 'anvil', 'forge', 'vault')",
         },
         include_full: {
           type: "boolean",
@@ -102,17 +107,15 @@ const TOOLS: Tool[] = [
           type: "string",
           enum: ["reference", "operational", "keystone"],
           description:
-            "Filter by page mode: 'reference' (documentation), 'operational' (procedures/guides), or 'keystone' (high-level concepts)",
+            "Filter by page mode: 'reference' (documentation), 'operational' (procedures/guides), or 'keystone' (high-level navigation)",
         },
         type: {
           type: "string",
           enum: [
-            "service-overview",
             "repo-profile",
-            "procedure",
             "guide",
             "concept",
-            "team-conventions",
+            "procedure",
             "keystone",
             "learning",
           ],
@@ -121,13 +124,18 @@ const TOOLS: Tool[] = [
         scope: {
           type: "object",
           properties: {
-            company: { type: "string" },
-            org: { type: "string" },
-            squad: { type: "string" },
-            service: { type: "string" },
-            repo: { type: "string" },
+            program: {
+              type: "string",
+              description:
+                "Program identifier (ties related repos, e.g., 'anvil-forge-vault')",
+            },
+            repo: {
+              type: "string",
+              description: "Repository name (e.g., 'anvil')",
+            },
           },
-          description: "Filter by organizational scope (all filters use AND logic)",
+          description:
+            "Filter by scope (all specified filters use AND logic)",
         },
         limit: {
           type: "number",
@@ -149,7 +157,7 @@ const TOOLS: Tool[] = [
         id: {
           type: "string",
           description:
-            "Page identifier (file path, e.g., 'services/document-service.md')",
+            "Page identifier (file path, e.g., 'repos/anvil.md')",
         },
       },
       required: ["id"],
@@ -167,7 +175,7 @@ const TOOLS: Tool[] = [
         id: {
           type: "string",
           description:
-            "Source page identifier (file path, e.g., 'services/document-service.md')",
+            "Source page identifier (file path, e.g., 'repos/anvil.md')",
         },
       },
       required: ["id"],
@@ -176,8 +184,8 @@ const TOOLS: Tool[] = [
   {
     name: "knowledge_list_by_scope",
     description:
-      "List and filter knowledge pages by organizational scope and other criteria. " +
-      "Use this to browse pages for a specific team, service, or organization, or to find " +
+      "List and filter knowledge pages by scope and other criteria. " +
+      "Use this to browse pages for a specific program or repo, or to find " +
       "pages with specific tags.",
     inputSchema: {
       type: "object",
@@ -185,11 +193,15 @@ const TOOLS: Tool[] = [
         scope: {
           type: "object",
           properties: {
-            company: { type: "string" },
-            org: { type: "string" },
-            squad: { type: "string" },
-            service: { type: "string" },
-            repo: { type: "string" },
+            program: {
+              type: "string",
+              description:
+                "Program identifier (e.g., 'anvil-forge-vault')",
+            },
+            repo: {
+              type: "string",
+              description: "Repository name (e.g., 'anvil')",
+            },
           },
           description:
             "Scope filter (at least one field required, all filters use AND logic)",
@@ -202,12 +214,10 @@ const TOOLS: Tool[] = [
         type: {
           type: "string",
           enum: [
-            "service-overview",
             "repo-profile",
-            "procedure",
             "guide",
             "concept",
-            "team-conventions",
+            "procedure",
             "keystone",
             "learning",
           ],
@@ -236,8 +246,8 @@ const TOOLS: Tool[] = [
 async function main() {
   const server = new Server(
     {
-      name: "@fdp-docmgmt/knowledge-mcp",
-      version: "0.1.0",
+      name: "@vault/knowledge-mcp",
+      version: "0.2.0",
     },
     {
       capabilities: {
@@ -334,7 +344,7 @@ async function main() {
   await server.connect(transport);
 
   // Log startup info to stderr (stdout is used for MCP protocol)
-  console.error(`Knowledge MCP server started`);
+  console.error(`Vault Knowledge MCP server started`);
   console.error(`Endpoint: ${endpoint}`);
   console.error(`Available tools: ${TOOLS.map((t) => t.name).join(", ")}`);
 }

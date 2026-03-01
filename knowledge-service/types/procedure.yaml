@@ -1,0 +1,25 @@
+id: procedure
+name: Procedure
+description: "Step-by-step recurring process — deploy, release, PR flow, incident response"
+required_scope: []
+fields: {}
+template: |
+  ---
+  type: procedure
+  title: ""
+  description: ""
+  scope:
+    program: ""
+  tags: []
+  mode: operational
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Procedure Title
+
+  ## When to Use
+
+  ## Steps
+
+  ## Checklist

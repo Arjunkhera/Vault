@@ -1,9 +1,10 @@
 """
-FastAPI application entry point for Knowledge Service.
+FastAPI application entry point for Vault Knowledge Service.
 
 Sets up the REST API with:
 - QMD adapter initialization
 - Collection setup (shared + workspace)
+- VaultError exception handler
 - Health endpoint
 - All 5 query operation endpoints
 - Lifespan management for startup/shutdown
@@ -16,7 +17,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .errors import VaultError
 from .layer1.qmd_adapter import QMDAdapter
+from .config.type_registry import TypeRegistry
 from .api.routes import router, get_store
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 
@@ -33,33 +36,29 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager for FastAPI app.
-    
-    Handles startup and shutdown:
-    - Startup: Initialize QMD adapter, setup collections, start sync daemon
-    - Shutdown: Cleanup resources
+
+    Startup: Initialize QMD adapter, setup collections, start sync daemon
+    Shutdown: Cleanup resources
     """
-    # ============================================================================
-    # STARTUP
-    # ============================================================================
-    logger.info("Starting Knowledge Service...")
-    
+    logger.info("Starting Vault Knowledge Service...")
+
     # Read environment variables
     qmd_index_name = os.getenv("QMD_INDEX_NAME", "knowledge")
     knowledge_repo_path = os.getenv("KNOWLEDGE_REPO_PATH", "/data/knowledge-repo")
     workspace_path = os.getenv("WORKSPACE_PATH", "/workspace")
-    sync_interval = int(os.getenv("SYNC_INTERVAL", "300"))  # 5 minutes default
-    
-    logger.info(f"Configuration:")
-    logger.info(f"  QMD_INDEX_NAME: {qmd_index_name}")
-    logger.info(f"  KNOWLEDGE_REPO_PATH: {knowledge_repo_path}")
-    logger.info(f"  WORKSPACE_PATH: {workspace_path}")
-    logger.info(f"  SYNC_INTERVAL: {sync_interval}s")
-    
+    sync_interval = int(os.getenv("SYNC_INTERVAL", "300"))
+    types_path = os.getenv("VAULT_TYPES_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "types"))
+
+    logger.info(
+        "Configuration: QMD_INDEX=%s, KNOWLEDGE_REPO=%s, WORKSPACE=%s, SYNC_INTERVAL=%ds, TYPES=%s",
+        qmd_index_name, knowledge_repo_path, workspace_path, sync_interval, types_path
+    )
+
     # Initialize QMD adapter
     logger.info("Initializing QMD adapter...")
     adapter = QMDAdapter(index_name=qmd_index_name)
-    
-    # Setup collections (idempotent - safe to call multiple times)
+
+    # Setup collections (idempotent)
     logger.info("Setting up QMD collections...")
     try:
         adapter.ensure_collections(
@@ -68,12 +67,27 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Collections setup complete")
     except Exception as e:
-        logger.error(f"Failed to setup collections: {e}")
+        logger.error("Failed to setup collections: %s", e)
         raise
-    
-    # Store adapter in app state for dependency injection
+
+    # Load type registry
+    logger.info("Loading type definitions...")
+    type_registry = TypeRegistry()
+    try:
+        type_registry.load_from_directory(types_path)
+        logger.info(
+            "Type registry loaded: %d types (%s)",
+            len(type_registry.type_ids()),
+            ", ".join(type_registry.type_ids())
+        )
+    except Exception as e:
+        logger.error("Failed to load type definitions: %s", e)
+        raise
+
+    # Store adapter and type registry in app state for dependency injection
     app.state.store = adapter
-    
+    app.state.type_registry = type_registry
+
     # Start sync daemon (git pull loop + workspace watcher)
     logger.info("Starting sync daemon...")
     git_pull_task, workspace_observer = await start_sync_daemon(
@@ -83,39 +97,61 @@ async def lifespan(app: FastAPI):
         sync_interval=sync_interval,
         debounce_seconds=5.0
     )
-    
-    # Store sync daemon components in app state for cleanup
+
     app.state.git_pull_task = git_pull_task
     app.state.workspace_observer = workspace_observer
-    
-    logger.info("Knowledge Service started successfully")
-    
+
+    logger.info("Vault Knowledge Service started successfully")
+
     yield
-    
-    # ============================================================================
-    # SHUTDOWN
-    # ============================================================================
-    logger.info("Shutting down Knowledge Service...")
-    
-    # Stop sync daemon gracefully
+
+    # Shutdown
+    logger.info("Shutting down Vault Knowledge Service...")
     await stop_sync_daemon(
         git_pull_task=app.state.git_pull_task,
         workspace_observer=app.state.workspace_observer
     )
-    
-    logger.info("Knowledge Service shutdown complete")
+    logger.info("Vault Knowledge Service shutdown complete")
 
 
-# Create FastAPI app with lifespan
+# Create FastAPI app
 app = FastAPI(
-    title="Knowledge Service",
-    description="Centralized, agent-oriented knowledge layer for Intuit",
-    version="0.1.0",
+    title="Vault Knowledge Service",
+    description="Shared knowledge layer — curated documentation, repo profiles, architecture, conventions",
+    version="0.2.0",
     lifespan=lifespan
 )
 
 
-# Override the get_store dependency to use app.state.store
+# Global exception handler for VaultError
+@app.exception_handler(VaultError)
+async def vault_error_handler(request: Request, exc: VaultError):
+    """Convert VaultError to structured JSON response."""
+    logger.warning("VaultError [%s]: %s", exc.code.value, exc.message)
+    return JSONResponse(
+        status_code=_error_status_code(exc),
+        content=exc.to_dict()
+    )
+
+
+def _error_status_code(exc: VaultError) -> int:
+    """Map error codes to HTTP status codes."""
+    from .errors import ErrorCode
+    mapping = {
+        ErrorCode.PAGE_NOT_FOUND: 404,
+        ErrorCode.TYPE_NOT_FOUND: 404,
+        ErrorCode.VALIDATION_ERROR: 422,
+        ErrorCode.REQUIRED_FIELD_MISSING: 422,
+        ErrorCode.INVALID_FIELD_VALUE: 422,
+        ErrorCode.SCOPE_INVALID: 422,
+        ErrorCode.SEARCH_ERROR: 502,
+        ErrorCode.SYNC_ERROR: 502,
+        ErrorCode.INDEX_ERROR: 502,
+    }
+    return mapping.get(exc.code, 500)
+
+
+# Override get_store dependency to use app.state.store
 def get_store_override(request: Request):
     """Dependency override to inject SearchStore from app state."""
     return request.app.state.store
@@ -123,42 +159,33 @@ def get_store_override(request: Request):
 
 app.dependency_overrides[get_store] = get_store_override
 
-
 # Include API routes
 app.include_router(router, prefix="", tags=["knowledge"])
 
 
 @app.get("/health")
 async def health_check(request: Request):
-    """
-    Health check endpoint.
-    
-    Returns service status and QMD index health information.
-    
-    Returns:
-        JSON with status and index info
-    """
+    """Health check endpoint."""
     try:
         store = request.app.state.store
         index_status = store.status()
-        
         return JSONResponse(
             status_code=200,
             content={
                 "status": "ok",
-                "service": "knowledge-service",
-                "version": "0.1.0",
+                "service": "vault-knowledge-service",
+                "version": "0.2.0",
                 "index": index_status
             }
         )
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
+        logger.error("Health check failed: %s", e)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "error",
-                "service": "knowledge-service",
-                "version": "0.1.0",
+                "service": "vault-knowledge-service",
+                "version": "0.2.0",
                 "error": str(e)
             }
         )
@@ -166,16 +193,11 @@ async def health_check(request: Request):
 
 @app.get("/")
 async def root():
-    """
-    Root endpoint with API information.
-    
-    Returns:
-        JSON with service info and available endpoints
-    """
+    """Root endpoint with API information."""
     return {
-        "service": "Knowledge Service",
-        "version": "0.1.0",
-        "description": "Centralized, agent-oriented knowledge layer for Intuit",
+        "service": "Vault Knowledge Service",
+        "version": "0.2.0",
+        "description": "Shared knowledge layer — curated documentation, repo profiles, architecture, conventions",
         "endpoints": {
             "health": "GET /health",
             "resolve_context": "POST /resolve-context",
@@ -188,13 +210,6 @@ async def root():
     }
 
 
-# Entry point for running with uvicorn directly
 if __name__ == "__main__":
     import uvicorn
-    
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

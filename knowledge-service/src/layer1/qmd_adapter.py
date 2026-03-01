@@ -1,167 +1,134 @@
 """
 QMD adapter implementation of the SearchStore interface.
 
-This module wraps the QMD CLI tool via subprocess calls. QMD is a TypeScript/Bun tool
+Wraps the QMD CLI tool via subprocess calls. QMD is a TypeScript/Bun tool
 with no Python library, so subprocess integration is the only option.
 
-All QMD commands use --index {index_name} to isolate the Knowledge Service index
-from the user's personal QMD index.
+All QMD commands use --index {index_name} to isolate the Knowledge Service
+index from the user's personal QMD index.
 """
 
 import json
+import logging
 import subprocess
 from typing import Optional
 
 from .interface import SearchStore, SearchResult, Document
+from ..errors import VaultError, ErrorCode
+
+
+logger = logging.getLogger(__name__)
 
 
 class QMDAdapter(SearchStore):
     """
     SearchStore implementation using QMD CLI via subprocess.
-    
+
     QMD is invoked as: qmd --index {index_name} <command> [args]
-    
+
     Config location: ~/.config/qmd/{index_name}.yml
     Database location: ~/.cache/qmd/{index_name}.sqlite
     """
-    
+
     def __init__(self, index_name: str = "knowledge"):
-        """
-        Initialize the QMD adapter.
-        
-        Args:
-            index_name: Name of the QMD index to use (default: "knowledge")
-        """
         self.index_name = index_name
-    
+
     def _run_qmd(self, args: list[str], check: bool = True) -> str:
         """
         Run a QMD CLI command and return stdout.
-        
-        Args:
-            args: Command arguments (without 'qmd' and '--index')
-            check: If True, raise exception on non-zero exit code
-            
-        Returns:
-            Command stdout as string
-            
+
         Raises:
-            subprocess.CalledProcessError: If command fails and check=True
+            VaultError: If command fails and check=True
         """
         cmd = ["qmd", "--index", self.index_name] + args
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=check
-        )
-        return result.stdout
-    
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, check=check
+            )
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            logger.error(
+                "QMD command failed: %s (exit %d)\nstderr: %s",
+                " ".join(cmd), e.returncode, e.stderr
+            )
+            raise VaultError(
+                ErrorCode.SEARCH_ERROR,
+                f"QMD command failed: {' '.join(args[:2])}",
+                details={"command": " ".join(cmd), "stderr": e.stderr}
+            ) from e
+
+    def _parse_search_results(self, output: str, collection: Optional[str]) -> list[SearchResult]:
+        """Parse QMD JSON search output into SearchResult objects."""
+        try:
+            results_data = json.loads(output)
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse QMD search output as JSON: %s", e)
+            return []
+
+        results = []
+        for item in results_data:
+            results.append(SearchResult(
+                file_path=item.get("file", ""),
+                score=item.get("score", 0.0),
+                snippet=item.get("snippet", ""),
+                collection=item.get("collection", collection or "")
+            ))
+        return results
+
     def search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """
-        Perform BM25 keyword search using 'qmd search'.
-        
-        Command: qmd --index {index} search "{query}" --json -n {limit} [-c {collection}]
-        """
+        """Perform BM25 keyword search using 'qmd search'."""
         args = ["search", query, "--json", "-n", str(limit)]
         if collection:
             args.extend(["-c", collection])
-        
+
         try:
             output = self._run_qmd(args)
-            results_data = json.loads(output)
-            
-            # Parse QMD JSON output into SearchResult objects
-            results = []
-            for item in results_data:
-                results.append(SearchResult(
-                    file_path=item.get("file", ""),
-                    score=item.get("score", 0.0),
-                    snippet=item.get("snippet", ""),
-                    collection=item.get("collection", collection or "")
-                ))
-            return results
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            # Log error but return empty results rather than crashing
-            print(f"QMD search error: {e}")
+            return self._parse_search_results(output, collection)
+        except VaultError:
+            logger.warning("BM25 search failed for query: %s", query)
             return []
-    
+
     def semantic_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """
-        Perform semantic vector search using 'qmd vsearch'.
-        
-        Command: qmd --index {index} vsearch "{query}" --json -n {limit} [-c {collection}]
-        """
+        """Perform semantic vector search using 'qmd vsearch'."""
         args = ["vsearch", query, "--json", "-n", str(limit)]
         if collection:
             args.extend(["-c", collection])
-        
+
         try:
             output = self._run_qmd(args)
-            results_data = json.loads(output)
-            
-            results = []
-            for item in results_data:
-                results.append(SearchResult(
-                    file_path=item.get("file", ""),
-                    score=item.get("score", 0.0),
-                    snippet=item.get("snippet", ""),
-                    collection=item.get("collection", collection or "")
-                ))
-            return results
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            print(f"QMD vsearch error: {e}")
+            return self._parse_search_results(output, collection)
+        except VaultError:
+            logger.warning("Semantic search failed for query: %s", query)
             return []
-    
+
     def hybrid_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """
-        Perform hybrid search (BM25 + vector + reranking) using 'qmd query'.
-        
-        Command: qmd --index {index} query "{query}" --json -n {limit} [-c {collection}]
-        """
+        """Perform hybrid search (BM25 + vector + reranking) using 'qmd query'."""
         args = ["query", query, "--json", "-n", str(limit)]
         if collection:
             args.extend(["-c", collection])
-        
+
         try:
             output = self._run_qmd(args)
-            results_data = json.loads(output)
-            
-            results = []
-            for item in results_data:
-                results.append(SearchResult(
-                    file_path=item.get("file", ""),
-                    score=item.get("score", 0.0),
-                    snippet=item.get("snippet", ""),
-                    collection=item.get("collection", collection or "")
-                ))
-            return results
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            print(f"QMD query error: {e}")
+            return self._parse_search_results(output, collection)
+        except VaultError:
+            logger.warning("Hybrid search failed for query: %s", query)
             return []
-    
+
     def get_document(self, file_path: str) -> Optional[str]:
-        """
-        Retrieve full document content using 'qmd get'.
-        
-        Command: qmd --index {index} get "{file_path}"
-        """
+        """Retrieve full document content using 'qmd get'."""
         try:
             output = self._run_qmd(["get", file_path])
             return output if output else None
-        except subprocess.CalledProcessError:
+        except VaultError:
+            logger.debug("Document not found: %s", file_path)
             return None
-    
+
     def get_documents_by_glob(self, pattern: str) -> list[Document]:
-        """
-        Retrieve multiple documents by glob pattern using 'qmd multi-get'.
-        
-        Command: qmd --index {index} multi-get "{pattern}" --json
-        """
+        """Retrieve multiple documents by glob pattern using 'qmd multi-get'."""
         try:
             output = self._run_qmd(["multi-get", pattern, "--json"])
             docs_data = json.loads(output)
-            
+
             documents = []
             for item in docs_data:
                 documents.append(Document(
@@ -170,87 +137,61 @@ class QMDAdapter(SearchStore):
                     collection=item.get("collection", "")
                 ))
             return documents
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            print(f"QMD multi-get error: {e}")
+        except (VaultError, json.JSONDecodeError) as e:
+            logger.warning("Multi-get failed for pattern %s: %s", pattern, e)
             return []
-    
+
     def list_documents(self, collection: Optional[str] = None) -> list[str]:
-        """
-        List all indexed documents using 'qmd ls'.
-        
-        Command: qmd --index {index} ls [collection]
-        
-        If no collection is specified, lists documents from all collections.
-        """
+        """List all indexed documents using 'qmd ls'."""
         if collection:
-            # List specific collection
-            args = ["ls", collection]
             try:
-                output = self._run_qmd(args)
-                # Parse output - each line has format: "size date qmd://collection/path"
+                output = self._run_qmd(["ls", collection])
                 files = []
                 for line in output.strip().split('\n'):
                     line = line.strip()
                     if line and line.startswith('qmd://'):
-                        # Extract just the qmd:// path (last column)
                         parts = line.split()
                         if parts:
                             files.append(parts[-1])
                     elif 'qmd://' in line:
-                        # Fallback: find qmd:// in the line
                         for part in line.split():
                             if part.startswith('qmd://'):
                                 files.append(part)
                                 break
                 return files
-            except subprocess.CalledProcessError as e:
-                print(f"QMD ls error: {e}")
+            except VaultError:
+                logger.warning("Failed to list documents in collection: %s", collection)
                 return []
         else:
-            # List all collections
             all_files = []
             for coll in ["shared", "workspace"]:
                 all_files.extend(self.list_documents(coll))
             return all_files
-    
+
     def reindex(self) -> None:
-        """
-        Trigger full re-index: update + embed.
-        
-        Commands:
-            qmd --index {index} update
-            qmd --index {index} embed
-        """
+        """Trigger full re-index: update + embed."""
         try:
-            # Update: incremental re-index of all collections
             self._run_qmd(["update"])
-            # Embed: rebuild vector embeddings for semantic search
             self._run_qmd(["embed"])
-        except subprocess.CalledProcessError as e:
-            print(f"QMD reindex error: {e}")
-    
+        except VaultError as e:
+            logger.error("Re-index failed: %s", e.message)
+            raise
+
     def status(self) -> dict:
-        """
-        Get index status using 'qmd status'.
-        
-        Command: qmd --index {index} status
-        """
+        """Get index status using 'qmd status'."""
         try:
             output = self._run_qmd(["status"])
-            # QMD status returns human-readable text, not JSON
-            # Parse it into a simple dict for now
             return {
                 "status": "ok",
                 "index_name": self.index_name,
                 "raw_output": output
             }
-        except subprocess.CalledProcessError as e:
+        except VaultError:
             return {
                 "status": "error",
                 "index_name": self.index_name,
-                "error": str(e)
             }
-    
+
     def ensure_collections(
         self,
         shared_path: str = "/data/knowledge-repo",
@@ -258,25 +199,19 @@ class QMDAdapter(SearchStore):
     ) -> None:
         """
         Ensure both collections are registered and indexed.
-        
-        This is called once at startup to set up the dual-source indexing:
+
+        Sets up dual-source indexing:
         - "shared" collection: knowledge repo (cloned inside container)
-        - "workspace" collection: user's Anvil workspace (mounted from host)
-        
-        This method is idempotent - safe to call multiple times.
-        
-        Args:
-            shared_path: Path to the shared knowledge repo
-            workspace_path: Path to the mounted workspace
+        - "workspace" collection: user's workspace (mounted from host)
+
+        Idempotent — safe to call multiple times.
         """
-        # Check existing collections
         try:
             output = self._run_qmd(["collection", "list"])
             existing_collections = output.lower()
-        except subprocess.CalledProcessError:
+        except VaultError:
             existing_collections = ""
-        
-        # Add "shared" collection if not exists
+
         if "shared" not in existing_collections:
             try:
                 self._run_qmd([
@@ -284,11 +219,10 @@ class QMDAdapter(SearchStore):
                     "--name", "shared",
                     "--mask", "**/*.md"
                 ])
-                print(f"Added 'shared' collection: {shared_path}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error adding 'shared' collection: {e}")
-        
-        # Add "workspace" collection if not exists
+                logger.info("Added 'shared' collection: %s", shared_path)
+            except VaultError as e:
+                logger.error("Failed to add 'shared' collection: %s", e.message)
+
         if "workspace" not in existing_collections:
             try:
                 self._run_qmd([
@@ -296,11 +230,10 @@ class QMDAdapter(SearchStore):
                     "--name", "workspace",
                     "--mask", "**/*.md"
                 ])
-                print(f"Added 'workspace' collection: {workspace_path}")
-            except subprocess.CalledProcessError as e:
-                print(f"Error adding 'workspace' collection: {e}")
-        
-        # Run initial index and embed
-        print("Running initial index...")
+                logger.info("Added 'workspace' collection: %s", workspace_path)
+            except VaultError as e:
+                logger.error("Failed to add 'workspace' collection: %s", e.message)
+
+        logger.info("Running initial index...")
         self.reindex()
-        print("Collections setup complete")
+        logger.info("Collections setup complete")

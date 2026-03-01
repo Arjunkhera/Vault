@@ -1,0 +1,32 @@
+id: repo-profile
+name: Repository Profile
+description: "Entry point for a repository — tech stack, key modules, how to build/test, dependencies"
+required_scope:
+  - repo
+fields: {}
+template: |
+  ---
+  type: repo-profile
+  title: ""
+  description: ""
+  scope:
+    program: ""
+    repo: ""
+  related: []
+  tags: []
+  mode: reference
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Repository Name
+
+  ## Overview
+
+  ## Tech Stack
+
+  ## Key Modules
+
+  ## Build & Test
+
+  ## Dependencies

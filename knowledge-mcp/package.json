@@ -1,7 +1,7 @@
 {
-  "name": "@fdp-docmgmt/knowledge-mcp",
-  "version": "0.1.0",
-  "description": "MCP thin client for Knowledge Service",
+  "name": "@vault/knowledge-mcp",
+  "version": "0.2.0",
+  "description": "MCP thin client for Vault Knowledge Service",
   "type": "module",
   "bin": {
     "knowledge-mcp": "./dist/index.js"
@@ -14,9 +14,10 @@
   "keywords": [
     "mcp",
     "knowledge-service",
+    "vault",
     "anvil"
   ],
-  "author": "FDP DocMgmt",
+  "author": "",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4"

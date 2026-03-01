@@ -24,6 +24,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+COPY types/ ./types/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
@@ -31,8 +32,11 @@ RUN mkdir -p /data/knowledge-repo /workspace
 
 EXPOSE 8000
 
-ENV KNOWLEDGE_REPO=fdp-docmgmt/knowledge-base
+ENV KNOWLEDGE_REPO_URL=""
+ENV KNOWLEDGE_REPO_PATH=/data/knowledge-repo
+ENV WORKSPACE_PATH=/workspace
 ENV SYNC_INTERVAL=300
 ENV QMD_INDEX_NAME=knowledge
+ENV VAULT_TYPES_PATH=/app/types
 
 CMD ["./entrypoint.sh"]

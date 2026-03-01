@@ -1,0 +1,25 @@
+id: concept
+name: Concept
+description: "Domain knowledge, architecture decisions, design patterns, mental models"
+required_scope: []
+fields: {}
+template: |
+  ---
+  type: concept
+  title: ""
+  description: ""
+  scope:
+    program: ""
+  tags: []
+  mode: reference
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Concept Title
+
+  ## What Is It
+
+  ## Why It Matters
+
+  ## How It Works

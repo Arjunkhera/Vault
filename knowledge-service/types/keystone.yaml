@@ -1,0 +1,24 @@
+id: keystone
+name: Keystone
+description: "Navigation hub — concise signpost linking to deeper pages for a program or domain"
+required_scope: []
+fields: {}
+template: |
+  ---
+  type: keystone
+  title: ""
+  description: ""
+  scope:
+    program: ""
+  related: []
+  tags: []
+  mode: keystone
+  owner: ""
+  last-verified: ""
+  ---
+
+  # Keystone Title
+
+  ## Overview
+
+  ## Key Pages
