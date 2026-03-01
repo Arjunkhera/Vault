@@ -12,14 +12,13 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from ..layer1.interface import SearchStore
-
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ class ReindexLock:
     Tracks last re-index time for logging and monitoring.
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.lock = asyncio.Lock()
         self.last_reindex: Optional[datetime] = None
         self.reindex_count = 0
@@ -163,12 +162,12 @@ class WorkspaceChangeHandler(FileSystemEventHandler):
         store: SearchStore,
         reindex_lock: ReindexLock,
         debounce_seconds: float = 5.0
-    ):
+    ) -> None:
         super().__init__()
         self.store = store
         self.reindex_lock = reindex_lock
         self.debounce_seconds = debounce_seconds
-        self.debounce_task: Optional[asyncio.Task] = None
+        self.debounce_task: Optional[asyncio.Task[None]] = None
         self.change_count = 0
         
         # Paths to ignore (relative patterns)
@@ -207,7 +206,7 @@ class WorkspaceChangeHandler(FileSystemEventHandler):
         
         return True
     
-    async def _debounced_reindex(self):
+    async def _debounced_reindex(self) -> None:
         """
         Debounced re-index coroutine.
         
@@ -221,7 +220,7 @@ class WorkspaceChangeHandler(FileSystemEventHandler):
             # Task was cancelled by new change, this is expected
             pass
     
-    def _trigger_debounced_reindex(self):
+    def _trigger_debounced_reindex(self) -> None:
         """
         Trigger debounced re-index.
         
@@ -235,21 +234,21 @@ class WorkspaceChangeHandler(FileSystemEventHandler):
         loop = asyncio.get_event_loop()
         self.debounce_task = loop.create_task(self._debounced_reindex())
     
-    def on_created(self, event: FileSystemEvent):
+    def on_created(self, event: FileSystemEvent) -> None:
         """Handle file creation events."""
         if self._should_process(event):
             self.change_count += 1
             logger.debug(f"Workspace file created: {event.src_path}")
             self._trigger_debounced_reindex()
     
-    def on_modified(self, event: FileSystemEvent):
+    def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
         if self._should_process(event):
             self.change_count += 1
             logger.debug(f"Workspace file modified: {event.src_path}")
             self._trigger_debounced_reindex()
     
-    def on_deleted(self, event: FileSystemEvent):
+    def on_deleted(self, event: FileSystemEvent) -> None:
         """Handle file deletion events."""
         if self._should_process(event):
             self.change_count += 1
@@ -262,7 +261,7 @@ def start_workspace_watcher(
     workspace_path: str,
     reindex_lock: ReindexLock,
     debounce_seconds: float = 5.0
-) -> Optional[Observer]:
+) -> Optional[Any]:  # type: ignore[name-defined]
     """
     Start file system watcher for workspace changes.
     
@@ -313,7 +312,7 @@ async def start_sync_daemon(
     workspace_path: str,
     sync_interval: int,
     debounce_seconds: float = 5.0
-) -> tuple[Optional[asyncio.Task], Optional[Observer]]:
+) -> tuple[Optional[asyncio.Task[None]], Optional[Any]]:
     """
     Start both sync daemon components.
     
@@ -336,7 +335,7 @@ async def start_sync_daemon(
     reindex_lock = ReindexLock()
     
     # Start git pull loop as asyncio task
-    git_pull_task = asyncio.create_task(
+    git_pull_task: asyncio.Task[None] = asyncio.create_task(
         git_pull_loop(store, knowledge_repo_path, sync_interval, reindex_lock)
     )
     
@@ -350,8 +349,8 @@ async def start_sync_daemon(
 
 
 async def stop_sync_daemon(
-    git_pull_task: Optional[asyncio.Task],
-    workspace_observer: Optional[Observer]
+    git_pull_task: Optional[asyncio.Task[None]],
+    workspace_observer: Optional[Any]
 ) -> None:
     """
     Stop both sync daemon components gracefully.

@@ -10,6 +10,7 @@ index from the user's personal QMD index.
 
 import json
 import logging
+from typing import Any
 import os
 import subprocess
 from pathlib import Path
@@ -35,7 +36,7 @@ class QMDAdapter(SearchStore):
     # Maps collection name → filesystem root (set during ensure_collections)
     _collection_paths: dict[str, str]
 
-    def __init__(self, index_name: str = "knowledge"):
+    def __init__(self, index_name: str = "knowledge") -> None:
         self.index_name = index_name
         self._collection_paths = {}
 
@@ -219,7 +220,7 @@ class QMDAdapter(SearchStore):
             logger.error("Re-index failed: %s", e.message)
             raise
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:  # type: ignore[type-arg]
         """Get index status using 'qmd status'."""
         try:
             output = self._run_qmd(["status"])

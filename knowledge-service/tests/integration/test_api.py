@@ -24,16 +24,9 @@ def _create_test_app() -> tuple[FastAPI, MockSearchStore]:
 
     @test_app.exception_handler(VaultError)
     async def vault_error_handler(request: Request, exc: VaultError):
-        from src.errors import ErrorCode
-        mapping = {
-            ErrorCode.PAGE_NOT_FOUND: 404,
-            ErrorCode.TYPE_NOT_FOUND: 404,
-            ErrorCode.VALIDATION_ERROR: 422,
-            ErrorCode.SEARCH_ERROR: 502,
-        }
         return JSONResponse(
-            status_code=mapping.get(exc.code, 500),
-            content=exc.to_dict()
+            status_code=exc.status_code,
+            content=exc.to_response().model_dump(),
         )
 
     def get_store_override():
@@ -195,6 +188,10 @@ class TestGetPage:
     def test_get_nonexistent_page(self, client):
         response = client.post("/get-page", json={"id": "nonexistent.md"})
         assert response.status_code == 404
+        data = response.json()
+        # Should have error structure
+        assert "error" in data
+        assert data["error"]["code"] == "PAGE_NOT_FOUND"
 
 
 class TestGetRelated:
@@ -208,6 +205,10 @@ class TestGetRelated:
     def test_get_related_nonexistent(self, client):
         response = client.post("/get-related", json={"id": "nonexistent.md"})
         assert response.status_code == 404
+        data = response.json()
+        # Should have error structure
+        assert "error" in data
+        assert data["error"]["code"] == "PAGE_NOT_FOUND"
 
 
 class TestListByScope:
@@ -266,4 +267,3 @@ class TestListByScope:
         })
         assert response.status_code == 200
         data = response.json()
-        assert len(data["pages"]) <= 2

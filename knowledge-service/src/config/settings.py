@@ -7,12 +7,12 @@ Precedence (highest to lowest):
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 import logging
 import os
 
 try:
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 except ImportError:
     yaml = None  # type: ignore
 
@@ -51,7 +51,7 @@ class VaultSettings:
 
 def load_settings(
     config_path: Optional[Path] = None,
-    cli_overrides: Optional[dict] = None,
+    cli_overrides: Optional[dict[str, Any]] = None,
 ) -> tuple[VaultSettings, dict[str, str]]:
     """
     Load settings with full precedence chain.
@@ -88,9 +88,9 @@ def load_settings(
         else:
             try:
                 with open(effective_config_path) as f:
-                    file_config = yaml.safe_load(f) or {}
+                    file_config: dict[str, Any] = yaml.safe_load(f) or {}
 
-                field_map = {
+                field_map: dict[str, type[Any]] = {
                     "knowledge_repo_path": str,
                     "workspace_path": str,
                     "qmd_index_name": str,
@@ -129,7 +129,7 @@ def load_settings(
         )
 
     # Layer 2: Environment variables
-    env_map = {
+    env_map: dict[str, tuple[str, type[Any]]] = {
         "KNOWLEDGE_REPO_PATH": ("knowledge_repo_path", str),
         "WORKSPACE_PATH": ("workspace_path", str),
         "QMD_INDEX_NAME": ("qmd_index_name", str),
