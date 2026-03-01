@@ -16,6 +16,18 @@ RUN git clone https://github.com/tobi/qmd.git /opt/qmd \
     && cd /opt/qmd \
     && npm install \
     && npm run build
+
+# Patch QMD: force gpu:false to skip CUDA auto-detection.
+# Podman/QEMU falsely reports CUDA available, triggering an ~8s cmake build
+# probe that always fails before falling back to the CPU prebuilt (~160ms).
+RUN sed -i '/async ensureLlama() {/,/return this\.llama;/{
+  /if (!this\.llama) {/,/return this\.llama;/c\
+        if (!this.llama) {\
+            this.llama = await getLlama({ gpu: false, logLevel: LlamaLogLevel.error });\
+        }\
+        return this.llama;
+}' /opt/qmd/dist/llm.js
+
 ENV PATH="/opt/qmd:${PATH}"
 
 WORKDIR /app

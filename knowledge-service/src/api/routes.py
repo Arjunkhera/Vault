@@ -16,6 +16,7 @@ Write path (5 operations):
 10. POST /registry/add - Add a new entry to a registry
 """
 
+import asyncio
 import logging
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Annotated
@@ -94,48 +95,29 @@ def get_schema_loader() -> SchemaLoader:
 SchemaLoaderDepends = Annotated[SchemaLoader, Depends(get_schema_loader)]
 
 
-@router.post("/resolve-context", response_model=ResolveContextResponse)
-async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
-    """
-    Resolve the full scope chain for a repo and return operational pages.
-    
-    This is the primary operation for US-4 (Knowledge Base Seeding).
-    Given a repo name, it:
-    1. Resolves the full organizational hierarchy (repo → service → squad → org → company)
-    2. Finds all operational pages applicable to any level in the scope chain
-    3. Returns the repo-profile page as entry_point
-    4. Returns operational pages sorted by specificity (repo-level first, company-level last)
-    
-    Args:
-        request: ResolveContextRequest with repo name and include_full flag
-        store: SearchStore instance (injected)
-        
-    Returns:
-        ResolveContextResponse with entry_point, operational_pages, and scope_chain
-    """
-    # Step 1: Resolve the scope chain
-    chain = resolve_scope_chain(request.repo, store)
-    
-    # Step 2: Collect operational pages
-    operational_pages_tuples = collect_operational_pages(chain, store)
-    
-    # Step 3: Find the entry point (repo-profile page)
+# ============================================================================
+# Synchronous handler implementations.
+# Each is called via asyncio.to_thread() from the async route handler so that
+# blocking subprocess.run() calls inside the QMD adapter do not starve the
+# uvicorn event loop.
+# ============================================================================
+
+def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore):
+    doc_cache = store.get_all_documents()
+    chain = resolve_scope_chain(request.repo, store, doc_cache=doc_cache)
+    operational_pages_tuples = collect_operational_pages(chain, store, doc_cache=doc_cache)
+
     entry_point = None
     results = store.search(request.repo, limit=20)
-    
     for result in results:
-        content = store.get_document(result.file_path)
+        content = doc_cache.get(result.file_path)
         if not content:
             continue
-        
         parsed = parse_page(content)
-        
-        # Check if this is the repo-profile page
         if parsed.scope.get("repo") == request.repo:
             entry_point = to_page_summary(parsed, result.file_path)
             break
-    
-    # Step 4: Convert operational pages to PageSummary or PageFull
+
     if request.include_full:
         operational_pages = [
             to_page_full(page, path)
@@ -143,7 +125,7 @@ async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
         ]
     else:
         operational_pages = to_summaries(operational_pages_tuples)
-    
+
     return ResolveContextResponse(
         entry_point=entry_point,
         operational_pages=operational_pages,
@@ -151,206 +133,119 @@ async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
     )
 
 
-@router.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest, store: StoreDepends):
-    """
-    Full-text and semantic search with progressive disclosure.
-    
-    Uses hybrid search (BM25 + vector + reranking) for best quality.
-    Returns PageSummary objects (descriptions only) to enable filtering
-    before requesting full pages.
-    
-    Optional filters:
-    - mode: reference, operational, or keystone
-    - type: service-overview, repo-profile, procedure, guide, etc.
-    - scope: filter by company, org, squad, service, or repo
-    
-    Args:
-        request: SearchRequest with query and optional filters
-        store: SearchStore instance (injected)
-        
-    Returns:
-        SearchResponse with results and total count
-    """
-    # Step 1: Perform hybrid search, fall back to BM25 if hybrid fails
-    search_results = store.hybrid_search(request.query, limit=request.limit * 2)
-    if not search_results:
-        search_results = store.search(request.query, limit=request.limit * 2)
-    
-    # Step 2: Parse frontmatter for each result
+def _search_sync(request: SearchRequest, store: SearchStore):
+    # BM25 keyword search. Hybrid disabled — see WI-4.
+    search_results = store.search(request.query, limit=request.limit * 2)
+    doc_cache = store.get_all_documents()
+
     pages_with_scores = []
-    
     for result in search_results:
-        content = store.get_document(result.file_path)
+        content = doc_cache.get(result.file_path)
         if not content:
             continue
-        
         parsed = parse_page(content)
         pages_with_scores.append((parsed, result.file_path, result.score))
-    
-    # Step 3: Apply filters
+
     pages = [(page, path) for page, path, _ in pages_with_scores]
-    
+
     if request.mode:
         pages = filter_by_mode(pages, request.mode)
-    
     if request.type:
         pages = filter_by_type(pages, request.type)
-    
     if request.scope:
         pages = filter_by_scope(pages, request.scope)
-    
-    # Step 4: Cap at limit
+
     pages = pages[:request.limit]
-    
-    # Step 5: Convert to PageSummary with scores
+
     scores = {path: score for _, path, score in pages_with_scores}
     summaries = to_summaries(pages, scores)
-    
-    return SearchResponse(
-        results=summaries,
-        total=len(summaries)
-    )
+
+    return SearchResponse(results=summaries, total=len(summaries))
+
+
+def _get_page_sync(request: GetPageRequest, store: SearchStore):
+    content = store.get_document(request.id)
+    if not content:
+        return None
+    parsed = parse_page(content)
+    return to_page_full(parsed, request.id)
+
+
+def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
+    content = store.get_document(request.id)
+    if not content:
+        return None
+    parsed = parse_page(content)
+    source_summary = to_page_summary(parsed, request.id)
+    related_pages_tuples = get_related_pages(parsed, store)
+    related_summaries = to_summaries(related_pages_tuples)
+    return GetRelatedResponse(source=source_summary, related=related_summaries)
+
+
+def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore):
+    doc_cache = store.get_all_documents()
+
+    all_pages = []
+    for path, content in doc_cache.items():
+        if not content:
+            continue
+        parsed = parse_page(content)
+        all_pages.append((parsed, path))
+
+    filtered = all_pages
+    filtered = filter_by_scope(filtered, request.scope)
+    if request.mode:
+        filtered = filter_by_mode(filtered, request.mode)
+    if request.type:
+        filtered = filter_by_type(filtered, request.type)
+    if request.tags:
+        filtered = filter_by_tags(filtered, request.tags)
+
+    filtered = filtered[:request.limit]
+    summaries = to_summaries(filtered)
+
+    return ListByScopeResponse(pages=summaries, total=len(summaries))
+
+
+# ============================================================================
+# Async route handlers — delegate to thread pool so subprocess calls
+# don't block the event loop.
+# ============================================================================
+
+@router.post("/resolve-context", response_model=ResolveContextResponse)
+async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
+    """Resolve the full scope chain for a repo and return operational pages."""
+    return await asyncio.to_thread(_resolve_context_sync, request, store)
+
+
+@router.post("/search", response_model=SearchResponse)
+async def search(request: SearchRequest, store: StoreDepends):
+    """Full-text search with progressive disclosure and optional filters."""
+    return await asyncio.to_thread(_search_sync, request, store)
 
 
 @router.post("/get-page", response_model=PageFull)
 async def get_page(request: GetPageRequest, store: StoreDepends):
-    """
-    Retrieve a full page by its identifier (file path or title).
-    
-    Returns the complete page content including body and all relationship fields.
-    
-    Args:
-        request: GetPageRequest with page ID (file path)
-        store: SearchStore instance (injected)
-        
-    Returns:
-        PageFull with complete page content
-        
-    Raises:
-        HTTPException 404 if page not found
-    """
-    # Try to get the document directly by file path
-    content = store.get_document(request.id)
-    
-    if not content:
+    """Retrieve a full page by its identifier (file path)."""
+    result = await asyncio.to_thread(_get_page_sync, request, store)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"Page not found: {request.id}")
-    
-    # Parse and convert to PageFull
-    parsed = parse_page(content)
-    page_full = to_page_full(parsed, request.id)
-    
-    return page_full
+    return result
 
 
 @router.post("/get-related", response_model=GetRelatedResponse)
 async def get_related(request: GetRelatedRequest, store: StoreDepends):
-    """
-    Follow links from a page to find related pages.
-    
-    Follows all relationship fields:
-    - related: explicitly linked pages
-    - depends_on: upstream dependencies
-    - consumed_by: downstream consumers
-    - applies_to: cross-cutting references
-    
-    Handles wiki-links [[Page Title]], dict refs {"repo": "name"}, and plain strings.
-    
-    Args:
-        request: GetRelatedRequest with source page ID
-        store: SearchStore instance (injected)
-        
-    Returns:
-        GetRelatedResponse with source page and related pages
-        
-    Raises:
-        HTTPException 404 if source page not found
-    """
-    # Get the source page
-    content = store.get_document(request.id)
-    
-    if not content:
+    """Follow links from a page to find related pages."""
+    result = await asyncio.to_thread(_get_related_sync, request, store)
+    if result is None:
         raise HTTPException(status_code=404, detail=f"Page not found: {request.id}")
-    
-    # Parse the source page
-    parsed = parse_page(content)
-    source_summary = to_page_summary(parsed, request.id)
-    
-    # Follow links to find related pages
-    related_pages_tuples = get_related_pages(parsed, store)
-    
-    # Convert to PageSummary list
-    related_summaries = to_summaries(related_pages_tuples)
-    
-    return GetRelatedResponse(
-        source=source_summary,
-        related=related_summaries
-    )
+    return result
 
 
 @router.post("/list-by-scope", response_model=ListByScopeResponse)
 async def list_by_scope(request: ListByScopeRequest, store: StoreDepends):
-    """
-    List and filter pages by scope, mode, type, and tags.
-    
-    Useful for browsing the knowledge base by organizational hierarchy.
-    All filters use AND logic - a page must match ALL specified criteria.
-    
-    Filters:
-    - scope: company, org, squad, service, or repo (at least one required)
-    - mode: reference, operational, or keystone (optional)
-    - type: service-overview, repo-profile, procedure, etc. (optional)
-    - tags: list of tags - page must have ALL specified tags (optional)
-    
-    Args:
-        request: ListByScopeRequest with scope filter and optional filters
-        store: SearchStore instance (injected)
-        
-    Returns:
-        ListByScopeResponse with filtered pages and total count
-    """
-    # Step 1: Get all documents
-    all_paths = store.list_documents()
-    
-    # Step 2: Parse frontmatter for each document
-    all_pages = []
-    
-    for path in all_paths:
-        content = store.get_document(path)
-        if not content:
-            continue
-        
-        parsed = parse_page(content)
-        all_pages.append((parsed, path))
-    
-    # Step 3: Apply filters in order
-    filtered = all_pages
-    
-    # Scope filter (required)
-    filtered = filter_by_scope(filtered, request.scope)
-    
-    # Mode filter (optional)
-    if request.mode:
-        filtered = filter_by_mode(filtered, request.mode)
-    
-    # Type filter (optional)
-    if request.type:
-        filtered = filter_by_type(filtered, request.type)
-    
-    # Tags filter (optional)
-    if request.tags:
-        filtered = filter_by_tags(filtered, request.tags)
-    
-    # Step 4: Cap at limit
-    filtered = filtered[:request.limit]
-    
-    # Step 5: Convert to PageSummary list
-    summaries = to_summaries(filtered)
-    
-    return ListByScopeResponse(
-        pages=summaries,
-        total=len(summaries)
-    )
+    """List and filter pages by scope, mode, type, and tags."""
+    return await asyncio.to_thread(_list_by_scope_sync, request, store)
 
 
 # ============================================================================
@@ -359,12 +254,7 @@ async def list_by_scope(request: ListByScopeRequest, store: StoreDepends):
 
 @router.post("/validate-page", response_model=ValidatePageResponse)
 async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepends):
-    """
-    Validate a page against the schema and registries.
-
-    Parses YAML frontmatter, runs all validation checks, and returns structured
-    errors with fuzzy-match suggestions for unknown registry values.
-    """
+    """Validate a page against the schema and registries."""
     import frontmatter as fm
 
     try:
@@ -408,15 +298,13 @@ async def suggest_metadata(
     loader: SchemaLoaderDepends,
     store: StoreDepends,
 ):
-    """
-    Suggest frontmatter metadata for a page.
+    """Suggest frontmatter metadata for a page."""
+    def _sync():
+        suggester = MetadataSuggester(loader, store=store)
+        result = suggester.suggest(request.content, hints=request.hints)
+        return result.to_dict()
 
-    Analyses content, searches registries and the KB, and returns per-field
-    suggestions with confidence levels and reasons.
-    """
-    suggester = MetadataSuggester(loader, store=store)
-    result = suggester.suggest(request.content, hints=request.hints)
-    result_dict = result.to_dict()
+    result_dict = await asyncio.to_thread(_sync)
 
     return SuggestMetadataResponse(
         kb_status=result_dict["kb_status"],
@@ -426,16 +314,13 @@ async def suggest_metadata(
 
 @router.post("/check-duplicates", response_model=CheckDuplicatesResponse)
 async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends):
-    """
-    Check candidate page content against existing KB pages for overlap.
+    """Check candidate page content against existing KB pages for overlap."""
+    def _sync():
+        checker = DuplicateChecker(store)
+        threshold = request.threshold if request.threshold is not None else 0.75
+        return checker.check(request.title, request.content, threshold=threshold)
 
-    Uses hybrid search with a two-query strategy (title + body excerpt).
-    Returns scored matches with recommendations: "create" if the content is
-    sufficiently novel (score >= threshold), "merge" if overlap is detected.
-    """
-    checker = DuplicateChecker(store)
-    threshold = request.threshold if request.threshold is not None else 0.75
-    result = checker.check(request.title, request.content, threshold=threshold)
+    result = await asyncio.to_thread(_sync)
 
     return CheckDuplicatesResponse(
         matches=[
@@ -454,24 +339,14 @@ async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends)
 
 @router.get("/schema", response_model=SchemaResponse)
 async def get_schema_endpoint(loader: SchemaLoaderDepends):
-    """
-    Return the full schema definition and all registry contents.
-
-    Agents call this to discover available page types, field constraints,
-    and known registry values before generating pages.
-    """
+    """Return the full schema definition and all registry contents."""
     schema_dict = loader.get_schema()
     return SchemaResponse(**schema_dict)
 
 
 @router.post("/registry/add", response_model=RegistryAddResponse)
 async def registry_add(request: RegistryAddRequest, loader: SchemaLoaderDepends):
-    """
-    Add a new entry to a named registry.
-
-    Writes the entry to the registry YAML file on disk and reloads the
-    in-memory registry. Returns confirmation with the new total count.
-    """
+    """Add a new entry to a named registry."""
     entry = RegistryEntry(
         id=request.entry.id,
         description=request.entry.description or "",

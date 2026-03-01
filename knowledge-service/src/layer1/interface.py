@@ -112,6 +112,15 @@ class SearchStore(ABC):
         """
         pass
     
+    def get_all_documents(self) -> dict[str, str]:
+        """
+        Fetch every indexed document in a single call and return as a
+        {file_path: content} lookup.  Default implementation calls
+        get_documents_by_glob; backends may override with a cheaper path.
+        """
+        docs = self.get_documents_by_glob("**/*.md")
+        return {d.file_path: d.content for d in docs}
+
     @abstractmethod
     def list_documents(self, collection: Optional[str] = None) -> list[str]:
         """

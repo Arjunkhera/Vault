@@ -90,7 +90,7 @@ def parse_page(content: str) -> ParsedPage:
         description=metadata.get("description", ""),
         scope=metadata.get("scope", {}),
         mode=metadata.get("mode", "reference"),
-        tags=metadata.get("tags", []),
+        tags=[str(t) for t in metadata.get("tags", [])],
         related=metadata.get("related", []),
         depends_on=metadata.get("depends-on", []),  # Note: YAML uses hyphens
         consumed_by=metadata.get("consumed-by", []),

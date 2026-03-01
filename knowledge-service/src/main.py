@@ -9,6 +9,7 @@ Sets up the REST API with:
 - Lifespan management for startup/shutdown
 """
 
+import asyncio
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -150,19 +151,23 @@ app.include_router(router, prefix="", tags=["knowledge"])
 
 
 @app.get("/health")
-async def health_check(request: Request):
+async def health_check():
     """
-    Health check endpoint.
-    
-    Returns service status and QMD index health information.
-    
-    Returns:
-        JSON with status and index info
+    Lightweight health check — no QMD subprocess, no I/O.
+    Use GET /status for full QMD index diagnostics.
+    """
+    return {"status": "ok", "service": "knowledge-service", "version": "0.1.0"}
+
+
+@app.get("/status")
+async def full_status(request: Request):
+    """
+    Full QMD index status (slow — spawns qmd subprocess).
+    Separated from /health so liveness probes stay fast.
     """
     try:
         store = request.app.state.store
-        index_status = store.status()
-        
+        index_status = await asyncio.to_thread(store.status)
         return JSONResponse(
             status_code=200,
             content={
@@ -173,7 +178,7 @@ async def health_check(request: Request):
             }
         )
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
+        logger.error(f"Status check failed: {e}")
         return JSONResponse(
             status_code=503,
             content={
@@ -199,6 +204,7 @@ async def root():
         "description": "Centralized, agent-oriented knowledge layer for Intuit",
         "endpoints": {
             "health": "GET /health",
+            "status": "GET /status",
             "resolve_context": "POST /resolve-context",
             "search": "POST /search",
             "get_page": "POST /get-page",

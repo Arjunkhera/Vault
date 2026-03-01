@@ -37,7 +37,11 @@ class ScopeChain:
         }.items() if v is not None}
 
 
-def resolve_scope_chain(repo: str, store: SearchStore) -> ScopeChain:
+def resolve_scope_chain(
+    repo: str,
+    store: SearchStore,
+    doc_cache: Optional[dict[str, str]] = None,
+) -> ScopeChain:
     """
     Resolve the full organizational hierarchy for a repository.
     
@@ -50,34 +54,29 @@ def resolve_scope_chain(repo: str, store: SearchStore) -> ScopeChain:
     Args:
         repo: Repository name to resolve
         store: SearchStore instance for querying pages
+        doc_cache: Pre-fetched {path: content} dict.  When provided the
+                   function reads from the cache instead of spawning
+                   per-result get_document subprocesses.
         
     Returns:
         ScopeChain with resolved hierarchy (may be partial if metadata is incomplete)
-        
-    Example:
-        >>> chain = resolve_scope_chain("document-service", store)
-        >>> chain.service
-        'Document Service'
-        >>> chain.org
-        'DME'
     """
-    # Start with just the repo name
     chain = ScopeChain(repo=repo)
     
-    # Search for pages mentioning this repo
     results = store.search(repo, limit=20)
     
-    # Look for the repo-profile page
     for result in results:
-        content = store.get_document(result.file_path)
+        content = (
+            doc_cache.get(result.file_path)
+            if doc_cache is not None
+            else store.get_document(result.file_path)
+        )
         if not content:
             continue
             
         parsed = parse_page(content)
         
-        # Check if this is the repo-profile page for our target repo
         if parsed.scope.get("repo") == repo:
-            # Found it! Extract the full scope hierarchy
             chain.service = parsed.scope.get("service")
             chain.squad = parsed.scope.get("squad")
             chain.org = parsed.scope.get("org")
@@ -87,62 +86,55 @@ def resolve_scope_chain(repo: str, store: SearchStore) -> ScopeChain:
     return chain
 
 
-def collect_operational_pages(chain: ScopeChain, store: SearchStore) -> list[tuple[ParsedPage, str]]:
+def collect_operational_pages(
+    chain: ScopeChain,
+    store: SearchStore,
+    doc_cache: Optional[dict[str, str]] = None,
+) -> list[tuple[ParsedPage, str]]:
     """
     Collect all operational pages applicable to the scope chain.
     
     Strategy:
-    1. Get all documents from the store
+    1. Get all documents (from cache or store)
     2. Parse each document's frontmatter
     3. Filter to pages with mode == "operational"
     4. Check if each operational page applies to any level in the scope chain
     5. Assign specificity scores (repo=5, service=4, squad=3, org=2, company=1)
     6. Sort by specificity descending (most specific first)
     
-    A page applies if:
-    - Its scope.repo matches chain.repo, OR
-    - Its scope.service matches chain.service, OR
-    - Its scope.squad matches chain.squad, OR
-    - Its scope.org matches chain.org, OR
-    - Its scope.company matches chain.company, OR
-    - Its applies_to field references the repo (as dict or string)
-    
     Args:
         chain: Resolved ScopeChain
         store: SearchStore instance
+        doc_cache: Pre-fetched {path: content} dict.  When provided, avoids
+                   the N+1 list_documents + get_document subprocess calls.
         
     Returns:
         List of (ParsedPage, file_path) tuples, sorted by specificity (most specific first)
-        
-    Example:
-        >>> chain = ScopeChain(repo="document-service", service="Document Service", org="DME")
-        >>> pages = collect_operational_pages(chain, store)
-        >>> # Returns repo-level pages first, then service-level, then org-level
     """
-    all_paths = store.list_documents()
+    if doc_cache is not None:
+        items = doc_cache.items()
+    else:
+        all_paths = store.list_documents()
+        items = ((p, store.get_document(p)) for p in all_paths)
+
     applicable_pages = []
     
-    for path in all_paths:
-        content = store.get_document(path)
+    for path, content in items:
         if not content:
             continue
             
         parsed = parse_page(content)
         
-        # Only consider operational pages
         if parsed.mode != "operational":
             continue
         
-        # Check if this page applies to any level in the scope chain
         specificity = _calculate_specificity(parsed, chain)
         
         if specificity > 0:
             applicable_pages.append((parsed, path, specificity))
     
-    # Sort by specificity descending (most specific first)
     applicable_pages.sort(key=lambda x: x[2], reverse=True)
     
-    # Return without specificity scores (just parsed page and path)
     return [(page, path) for page, path, _ in applicable_pages]
 
 
