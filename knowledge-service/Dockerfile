@@ -31,7 +31,7 @@ RUN mkdir -p /data/knowledge-repo /workspace
 
 EXPOSE 8000
 
-ENV KNOWLEDGE_REPO=fdp-docmgmt/knowledge-base
+ENV KNOWLEDGE_REPO=akhera/knowledge-base
 ENV SYNC_INTERVAL=300
 ENV QMD_INDEX_NAME=knowledge
 

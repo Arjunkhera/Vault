@@ -1,0 +1,2 @@
+[console_scripts]
+bootstrap = bootstrap_pipeline.cli:main

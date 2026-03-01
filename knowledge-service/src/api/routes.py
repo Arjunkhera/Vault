@@ -1,14 +1,22 @@
 """
 REST API routes for Knowledge Service.
 
-Implements 5 operations:
+Read path (5 operations):
 1. POST /resolve-context - Resolve operational pages for a repo
 2. POST /search - Full-text + semantic search with progressive disclosure
 3. POST /get-page - Retrieve full page by ID
 4. POST /get-related - Follow links from a page
 5. POST /list-by-scope - Browse/filter pages by scope
+
+Write path (5 operations):
+6. POST /validate-page - Validate page content against schema + registries
+7. POST /suggest-metadata - Suggest frontmatter values from content analysis
+8. POST /check-duplicates - Score content similarity against existing KB pages
+9. GET  /schema - Return full schema definition + registries
+10. POST /registry/add - Add a new entry to a registry
 """
 
+import logging
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Annotated
 
@@ -23,6 +31,9 @@ from ..layer2.mode_filter import (
     to_summaries
 )
 from ..layer2.link_navigator import get_related_pages
+from ..layer2.schema import SchemaLoader, PageValidator, RegistryEntry
+from ..layer2.suggester import MetadataSuggester
+from ..layer2.dedup import DuplicateChecker
 from .models import (
     ResolveContextRequest,
     ResolveContextResponse,
@@ -34,6 +45,19 @@ from .models import (
     GetRelatedResponse,
     ListByScopeRequest,
     ListByScopeResponse,
+    ValidatePageRequest,
+    ValidatePageResponse,
+    ValidationErrorModel,
+    ValidationWarningModel,
+    SuggestMetadataRequest,
+    SuggestMetadataResponse,
+    CheckDuplicatesRequest,
+    CheckDuplicatesResponse,
+    DuplicateMatchModel,
+    SchemaResponse,
+    RegistryAddRequest,
+    RegistryAddResponse,
+    RegistryEntryModel,
 )
 
 
@@ -54,6 +78,20 @@ def get_store() -> SearchStore:
 
 
 StoreDepends = Annotated[SearchStore, Depends(get_store)]
+
+logger = logging.getLogger(__name__)
+
+
+def get_schema_loader() -> SchemaLoader:
+    """
+    Dependency injection for SchemaLoader.
+
+    Placeholder replaced via dependency_overrides in main.py.
+    """
+    raise NotImplementedError("SchemaLoader dependency not configured")
+
+
+SchemaLoaderDepends = Annotated[SchemaLoader, Depends(get_schema_loader)]
 
 
 @router.post("/resolve-context", response_model=ResolveContextResponse)
@@ -134,8 +172,10 @@ async def search(request: SearchRequest, store: StoreDepends):
     Returns:
         SearchResponse with results and total count
     """
-    # Step 1: Perform hybrid search
-    search_results = store.hybrid_search(request.query, limit=request.limit * 2)  # Get extra for filtering
+    # Step 1: Perform hybrid search, fall back to BM25 if hybrid fails
+    search_results = store.hybrid_search(request.query, limit=request.limit * 2)
+    if not search_results:
+        search_results = store.search(request.query, limit=request.limit * 2)
     
     # Step 2: Parse frontmatter for each result
     pages_with_scores = []
@@ -310,4 +350,151 @@ async def list_by_scope(request: ListByScopeRequest, store: StoreDepends):
     return ListByScopeResponse(
         pages=summaries,
         total=len(summaries)
+    )
+
+
+# ============================================================================
+# Write-Path Operations
+# ============================================================================
+
+@router.post("/validate-page", response_model=ValidatePageResponse)
+async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepends):
+    """
+    Validate a page against the schema and registries.
+
+    Parses YAML frontmatter, runs all validation checks, and returns structured
+    errors with fuzzy-match suggestions for unknown registry values.
+    """
+    import frontmatter as fm
+
+    try:
+        post = fm.loads(request.content)
+        metadata = dict(post.metadata)
+    except Exception as e:
+        return ValidatePageResponse(
+            valid=False,
+            errors=[ValidationErrorModel(
+                field="frontmatter",
+                message=f"Failed to parse YAML frontmatter: {e}",
+                action_required="fix_format",
+            )],
+        )
+
+    validator = PageValidator(loader)
+    result = validator.validate(metadata)
+
+    return ValidatePageResponse(
+        valid=result.valid,
+        errors=[
+            ValidationErrorModel(
+                field=err.field,
+                value=err.value,
+                message=err.message,
+                suggestions=err.suggestions,
+                action_required=err.action_required,
+            )
+            for err in result.errors
+        ],
+        warnings=[
+            ValidationWarningModel(field=w.field, message=w.message)
+            for w in result.warnings
+        ],
+    )
+
+
+@router.post("/suggest-metadata", response_model=SuggestMetadataResponse)
+async def suggest_metadata(
+    request: SuggestMetadataRequest,
+    loader: SchemaLoaderDepends,
+    store: StoreDepends,
+):
+    """
+    Suggest frontmatter metadata for a page.
+
+    Analyses content, searches registries and the KB, and returns per-field
+    suggestions with confidence levels and reasons.
+    """
+    suggester = MetadataSuggester(loader, store=store)
+    result = suggester.suggest(request.content, hints=request.hints)
+    result_dict = result.to_dict()
+
+    return SuggestMetadataResponse(
+        kb_status=result_dict["kb_status"],
+        suggestions=result_dict["suggestions"],
+    )
+
+
+@router.post("/check-duplicates", response_model=CheckDuplicatesResponse)
+async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends):
+    """
+    Check candidate page content against existing KB pages for overlap.
+
+    Uses hybrid search with a two-query strategy (title + body excerpt).
+    Returns scored matches with recommendations: "create" if the content is
+    sufficiently novel (score >= threshold), "merge" if overlap is detected.
+    """
+    checker = DuplicateChecker(store)
+    threshold = request.threshold if request.threshold is not None else 0.75
+    result = checker.check(request.title, request.content, threshold=threshold)
+
+    return CheckDuplicatesResponse(
+        matches=[
+            DuplicateMatchModel(
+                page_path=m.page_path,
+                title=m.title,
+                similarity_score=m.similarity_score,
+                recommendation=m.recommendation,
+                matched_snippets=m.matched_snippets,
+            )
+            for m in result.matches
+        ],
+        has_conflicts=result.has_conflicts,
+    )
+
+
+@router.get("/schema", response_model=SchemaResponse)
+async def get_schema_endpoint(loader: SchemaLoaderDepends):
+    """
+    Return the full schema definition and all registry contents.
+
+    Agents call this to discover available page types, field constraints,
+    and known registry values before generating pages.
+    """
+    schema_dict = loader.get_schema()
+    return SchemaResponse(**schema_dict)
+
+
+@router.post("/registry/add", response_model=RegistryAddResponse)
+async def registry_add(request: RegistryAddRequest, loader: SchemaLoaderDepends):
+    """
+    Add a new entry to a named registry.
+
+    Writes the entry to the registry YAML file on disk and reloads the
+    in-memory registry. Returns confirmation with the new total count.
+    """
+    entry = RegistryEntry(
+        id=request.entry.id,
+        description=request.entry.description or "",
+        aliases=request.entry.aliases or [],
+        scope_org=request.entry.scope_org,
+    )
+
+    try:
+        loader.add_registry_entry(request.registry, entry)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    total = len(loader.get_registry(request.registry))
+    logger.info("Registry '%s': added '%s' (total: %d)", request.registry, entry.id, total)
+
+    return RegistryAddResponse(
+        added=True,
+        registry=request.registry,
+        entry=RegistryEntryModel(
+            id=entry.id,
+            description=entry.description,
+            aliases=entry.aliases,
+            scope_org=entry.scope_org,
+        ),
+        total_entries=total,
     )

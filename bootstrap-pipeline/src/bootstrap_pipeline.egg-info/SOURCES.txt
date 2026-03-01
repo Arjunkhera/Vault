@@ -1,0 +1,12 @@
+pyproject.toml
+src/bootstrap_pipeline/__init__.py
+src/bootstrap_pipeline/cli.py
+src/bootstrap_pipeline/filters.py
+src/bootstrap_pipeline/ingest.py
+src/bootstrap_pipeline/models.py
+src/bootstrap_pipeline.egg-info/PKG-INFO
+src/bootstrap_pipeline.egg-info/SOURCES.txt
+src/bootstrap_pipeline.egg-info/dependency_links.txt
+src/bootstrap_pipeline.egg-info/entry_points.txt
+src/bootstrap_pipeline.egg-info/requires.txt
+src/bootstrap_pipeline.egg-info/top_level.txt

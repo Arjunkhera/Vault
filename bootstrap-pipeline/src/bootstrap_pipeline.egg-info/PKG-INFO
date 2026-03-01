@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: bootstrap-pipeline
+Version: 0.1.0
+Summary: Bulk bootstrap pipeline for the Knowledge Base — ingests repos and local files, generates knowledge pages via LLM, validates against Knowledge Service schema.
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2.9.0
+Requires-Dist: pyyaml>=6.0.2

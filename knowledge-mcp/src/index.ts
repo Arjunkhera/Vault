@@ -59,6 +59,34 @@ async function callKnowledgeAPI(path: string, body: unknown): Promise<unknown> {
 }
 
 /**
+ * Make an HTTP GET request to the Knowledge Service API
+ */
+async function callKnowledgeAPIGet(path: string): Promise<unknown> {
+  try {
+    const response = await fetch(`${endpoint}${path}`, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `HTTP ${response.status}: ${response.statusText}\n${errorText}`
+      );
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Knowledge Service API error: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
  * Tool definitions matching the Knowledge Service REST API
  */
 const TOOLS: Tool[] = [
@@ -228,6 +256,134 @@ const TOOLS: Tool[] = [
       required: ["scope"],
     },
   },
+
+  // =========================================================================
+  // Write-path tools
+  // =========================================================================
+
+  {
+    name: "knowledge_validate_page",
+    description:
+      "Validate a knowledge page against the schema and registries. Returns structured " +
+      "errors with fuzzy-match suggestions for unknown values. Use this before committing " +
+      "a page to verify it meets all schema requirements.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string",
+          description:
+            "Full markdown string including YAML frontmatter to validate",
+        },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "knowledge_suggest_metadata",
+    description:
+      "Suggest frontmatter metadata for a knowledge page. Analyses content, searches " +
+      "registries and the KB, and returns per-field suggestions with confidence levels. " +
+      "Use this to auto-fill frontmatter when creating or converting pages.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string",
+          description:
+            "Full markdown — may have partial or empty frontmatter",
+        },
+        hints: {
+          type: "object",
+          description:
+            "Optional partial knowledge to improve suggestions, e.g. { 'scope.service': 'Document Service' }",
+        },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "knowledge_check_duplicates",
+    description:
+      "Check candidate page content against existing KB pages for overlap. Uses hybrid " +
+      "search with a two-query strategy (title + body excerpt) and returns scored matches. " +
+      "Score >= threshold means content is novel (recommend 'create'). Below threshold means " +
+      "overlap detected (recommend 'merge'). Use before committing new pages to avoid duplicates.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Proposed page title to check against existing pages",
+        },
+        content: {
+          type: "string",
+          description: "Page body content to check for duplicates",
+        },
+        threshold: {
+          type: "number",
+          description:
+            "Similarity threshold (0-1). Score >= threshold → create (novel). " +
+            "Below → merge (overlap). Default: 0.75",
+          default: 0.75,
+        },
+      },
+      required: ["title", "content"],
+    },
+  },
+  {
+    name: "knowledge_get_schema",
+    description:
+      "Retrieve the full schema definition and all registry contents (tags, services, " +
+      "teams, orgs). Use this to understand available page types, field constraints, and " +
+      "valid registry values before generating pages.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "knowledge_registry_add",
+    description:
+      "Add a new entry to a registry (tags, services, teams, or orgs). Use this when " +
+      "validation rejects a value that should be added as new rather than corrected. " +
+      "The entry is persisted to the YAML file and available immediately.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        registry: {
+          type: "string",
+          enum: ["tags", "services", "teams", "orgs"],
+          description: "Which registry to add to",
+        },
+        entry: {
+          type: "object",
+          properties: {
+            id: {
+              type: "string",
+              description: "Canonical identifier for the entry",
+            },
+            description: {
+              type: "string",
+              description: "Human-readable description",
+            },
+            aliases: {
+              type: "array",
+              items: { type: "string" },
+              description: "Alternative names for fuzzy matching",
+            },
+            scope_org: {
+              type: "string",
+              description: "Org mapping (services and teams registries only)",
+            },
+          },
+          required: ["id"],
+          description: "The registry entry to add",
+        },
+      },
+      required: ["registry", "entry"],
+    },
+  },
 ];
 
 /**
@@ -299,6 +455,40 @@ async function main() {
             type: args.type,
             tags: args.tags,
             limit: args.limit ?? 50,
+          });
+          break;
+
+        // Write-path tools
+
+        case "knowledge_validate_page":
+          result = await callKnowledgeAPI("/validate-page", {
+            content: args.content,
+          });
+          break;
+
+        case "knowledge_suggest_metadata":
+          result = await callKnowledgeAPI("/suggest-metadata", {
+            content: args.content,
+            hints: args.hints,
+          });
+          break;
+
+        case "knowledge_check_duplicates":
+          result = await callKnowledgeAPI("/check-duplicates", {
+            title: args.title,
+            content: args.content,
+            threshold: args.threshold ?? 0.75,
+          });
+          break;
+
+        case "knowledge_get_schema":
+          result = await callKnowledgeAPIGet("/schema");
+          break;
+
+        case "knowledge_registry_add":
+          result = await callKnowledgeAPI("/registry/add", {
+            registry: args.registry,
+            entry: args.entry,
           });
           break;
 

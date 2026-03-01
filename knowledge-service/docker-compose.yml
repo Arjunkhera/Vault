@@ -5,8 +5,9 @@ services:
       - "8000:8000"
     volumes:
       - ~/anvil-workspace:/workspace:ro
+    env_file:
+      - .env
     environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - KNOWLEDGE_REPO=fdp-docmgmt/knowledge-base
+      - KNOWLEDGE_REPO=akhera/knowledge-base
       - SYNC_INTERVAL=300
     restart: unless-stopped

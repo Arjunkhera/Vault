@@ -17,7 +17,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .layer1.qmd_adapter import QMDAdapter
-from .api.routes import router, get_store
+from .layer2.schema import SchemaLoader
+from .api.routes import router, get_store, get_schema_loader
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 
 
@@ -74,6 +75,18 @@ async def lifespan(app: FastAPI):
     # Store adapter in app state for dependency injection
     app.state.store = adapter
     
+    # Load schema + registries from _schema/ directory in knowledge repo
+    schema_dir = os.path.join(knowledge_repo_path, "_schema")
+    logger.info("Loading schema from %s ...", schema_dir)
+    schema_loader = SchemaLoader(schema_dir)
+    try:
+        schema_loader.load()
+        logger.info("Schema loaded successfully")
+    except Exception as e:
+        logger.warning("Schema load failed (write-path will be degraded): %s", e)
+        # Non-fatal — read path still works without schema
+    app.state.schema_loader = schema_loader
+    
     # Start sync daemon (git pull loop + workspace watcher)
     logger.info("Starting sync daemon...")
     git_pull_task, workspace_observer = await start_sync_daemon(
@@ -122,6 +135,14 @@ def get_store_override(request: Request):
 
 
 app.dependency_overrides[get_store] = get_store_override
+
+
+def get_schema_loader_override(request: Request):
+    """Dependency override to inject SchemaLoader from app state."""
+    return request.app.state.schema_loader
+
+
+app.dependency_overrides[get_schema_loader] = get_schema_loader_override
 
 
 # Include API routes
@@ -182,7 +203,11 @@ async def root():
             "search": "POST /search",
             "get_page": "POST /get-page",
             "get_related": "POST /get-related",
-            "list_by_scope": "POST /list-by-scope"
+            "list_by_scope": "POST /list-by-scope",
+            "validate_page": "POST /validate-page",
+            "suggest_metadata": "POST /suggest-metadata",
+            "schema": "GET /schema",
+            "registry_add": "POST /registry/add",
         },
         "docs": "/docs"
     }

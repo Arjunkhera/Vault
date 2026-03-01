@@ -1,0 +1,19 @@
+[project]
+name = "bootstrap-pipeline"
+version = "0.1.0"
+description = "Bulk bootstrap pipeline for the Knowledge Base — ingests repos and local files, generates knowledge pages via LLM, validates against Knowledge Service schema."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.9.0",
+    "pyyaml>=6.0.2",
+]
+
+[project.scripts]
+bootstrap = "bootstrap_pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
