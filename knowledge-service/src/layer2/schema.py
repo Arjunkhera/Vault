@@ -1,4 +1,5 @@
 """
+from __future__ import annotations
 Schema loader and page validator for Knowledge Service write path.
 
 SchemaLoader reads _schema/schema.yaml and _schema/registries/*.yaml from the
@@ -15,7 +16,7 @@ from difflib import get_close_matches
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
+import yaml  # type: ignore[import,import-untyped]
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ValidationError:
     """A validation failure that must be fixed before a page is accepted."""
-    field: str
+    field_name: str
     value: str | list[Any] | None = None
     message: str = ""
     suggestions: list[str] = field(default_factory=list)
@@ -37,7 +38,7 @@ class ValidationError:
 @dataclass
 class ValidationWarning:
     """A non-blocking suggestion (e.g. recommended field missing)."""
-    field: str
+    field_name: str
     message: str = ""
 
 
@@ -337,7 +338,7 @@ class PageValidator:
         page_type_id = metadata.get("type")
         if not page_type_id:
             errors.append(ValidationError(
-                field="type",
+                field_name="type",
                 message="Required field 'type' is missing",
                 action_required="provide_value",
             ))
@@ -348,7 +349,7 @@ class PageValidator:
             known = self._loader.known_page_type_ids()
             suggestions = get_close_matches(page_type_id, known, n=3, cutoff=0.5)
             errors.append(ValidationError(
-                field="type",
+                field_name="type",
                 value=page_type_id,
                 message=f"Unknown page type '{page_type_id}'",
                 suggestions=suggestions or known,
@@ -363,7 +364,7 @@ class PageValidator:
             val = metadata.get(req_field)
             if val is None or val == "" or val == []:
                 errors.append(ValidationError(
-                    field=req_field,
+                    field_name=req_field,
                     message=f"Required field '{req_field}' is missing",
                     action_required="provide_value",
                 ))
@@ -377,7 +378,7 @@ class PageValidator:
             max_len = constraints["title"].get("max_length", 999)
             if len(title) > max_len:
                 errors.append(ValidationError(
-                    field="title",
+                    field_name="title",
                     value=title,
                     message=f"Title exceeds {max_len} characters (got {len(title)})",
                     action_required="fix_constraint",
@@ -389,7 +390,7 @@ class PageValidator:
             max_len = constraints["description"].get("max_length", 999)
             if len(desc) > max_len:
                 errors.append(ValidationError(
-                    field="description",
+                    field_name="description",
                     value=desc,
                     message=f"Description exceeds {max_len} characters (got {len(desc)})",
                     action_required="fix_constraint",
@@ -401,7 +402,7 @@ class PageValidator:
             min_items = constraints["tags"].get("min_items", 0)
             if len(tags) < min_items:
                 errors.append(ValidationError(
-                    field="tags",
+                    field_name="tags",
                     value=tags,
                     message=f"'tags' requires at least {min_items} item(s), got {len(tags)}",
                     action_required="fix_constraint",
@@ -414,7 +415,7 @@ class PageValidator:
             filled = {k: v for k, v in scope.items() if v}
             if len(filled) < min_fields:
                 errors.append(ValidationError(
-                    field="scope",
+                    field_name="scope",
                     message=f"'scope' requires at least {min_fields} field(s), got {len(filled)}",
                     action_required="fix_constraint",
                 ))
@@ -425,7 +426,7 @@ class PageValidator:
             lv_str = str(last_verified)
             if not _DATE_RE.match(lv_str):
                 errors.append(ValidationError(
-                    field="last-verified",
+                    field_name="last-verified",
                     value=lv_str,
                     message="'last-verified' must be in YYYY-MM-DD format",
                     action_required="fix_format",
@@ -435,7 +436,7 @@ class PageValidator:
         auto_gen = metadata.get("auto-generated")
         if auto_gen is not None and not isinstance(auto_gen, bool):
             errors.append(ValidationError(
-                field="auto-generated",
+                field_name="auto-generated",
                 value=str(auto_gen),
                 message="'auto-generated' must be a boolean (true/false)",
                 action_required="fix_format",
@@ -451,7 +452,7 @@ class PageValidator:
         mode = metadata.get("mode")
         if mode and pt.allowed_modes and mode not in pt.allowed_modes:
             errors.append(ValidationError(
-                field="mode",
+                field_name="mode",
                 value=mode,
                 message=f"Mode '{mode}' is not allowed for type '{pt.id}'. Allowed: {pt.allowed_modes}",
                 suggestions=pt.allowed_modes,
@@ -463,7 +464,7 @@ class PageValidator:
             for rsf in pt.required_scope_fields:
                 if not scope.get(rsf):
                     errors.append(ValidationError(
-                        field=f"scope.{rsf}",
+                        field_name=f"scope.{rsf}",
                         message=f"Page type '{pt.id}' requires scope field '{rsf}'",
                         action_required="provide_value",
                     ))
@@ -473,7 +474,7 @@ class PageValidator:
             val = metadata.get(rec_field)
             if val is None or val == "" or val == []:
                 warnings.append(ValidationWarning(
-                    field=rec_field,
+                    field_name=rec_field,
                     message=f"Recommended field '{rec_field}' is not set",
                 ))
 
@@ -506,7 +507,7 @@ class PageValidator:
             canonical, suggestions = _fuzzy_match_registry(str(val), entries)
             if canonical is None:
                 errors.append(ValidationError(
-                    field=field_name,
+                    field_name=field_name,
                     value=val,
                     message=f"Unknown {field_name[:-1] if field_name.endswith('s') else field_name} '{val}'",
                     suggestions=suggestions,
@@ -515,7 +516,7 @@ class PageValidator:
             elif suggestions:
                 # alias match — warn with canonical form
                 warnings.append(ValidationWarning(
-                    field=field_name,
+                    field_name=field_name,
                     message=f"'{val}' is an alias for '{canonical}'. Consider using the canonical form.",
                 ))
 
@@ -540,7 +541,7 @@ class PageValidator:
         canonical, suggestions = _fuzzy_match_registry(str(value), entries)
         if canonical is None:
             errors.append(ValidationError(
-                field=display_field,
+                field_name=display_field,
                 value=value,
                 message=f"Unknown {display_field} value '{value}'",
                 suggestions=suggestions,
@@ -548,6 +549,6 @@ class PageValidator:
             ))
         elif suggestions:
             warnings.append(ValidationWarning(
-                field=display_field,
+                field_name=display_field,
                 message=f"'{value}' is an alias for '{canonical}'. Consider using the canonical form.",
             ))

@@ -19,7 +19,7 @@ Write path (5 operations):
 import asyncio
 import logging
 from fastapi import APIRouter, Depends
-from typing import Annotated
+from typing import Annotated, Any
 
 from ..layer1.interface import SearchStore
 from ..layer2.frontmatter import parse_page, to_page_summary, to_page_full
@@ -43,6 +43,7 @@ from .models import (
     SearchResponse,
     GetPageRequest,
     PageFull,
+    PageSummary,
     GetRelatedRequest,
     GetRelatedResponse,
     ListByScopeRequest,
@@ -103,13 +104,13 @@ SchemaLoaderDepends = Annotated[SchemaLoader, Depends(get_schema_loader)]
 # uvicorn event loop.
 # ============================================================================
 
-def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore):
+def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore) -> ResolveContextResponse:
     """Synchronous implementation of resolve-context."""
     doc_cache = store.get_all_documents()
     scope = resolve_scope(request.repo, store, doc_cache=doc_cache)
     operational_pages_tuples = collect_operational_pages(scope, store, doc_cache=doc_cache)
 
-    entry_point = None
+    entry_point: PageSummary | None = None
     results = store.search(request.repo, limit=20)
 
     for result in results:
@@ -124,13 +125,13 @@ def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore):
             break
 
     if request.include_full:
-        operational_pages = [
+        operational_pages_list: list[PageFull] = [
             to_page_full(page, path)
             for page, path in operational_pages_tuples
         ]
+        operational_pages: list[PageSummary | PageFull] = operational_pages_list  # type: ignore[assignment]
     else:
         operational_pages = to_summaries(operational_pages_tuples)
-
     return ResolveContextResponse(
         entry_point=entry_point,
         operational_pages=operational_pages,
@@ -139,7 +140,7 @@ def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore):
 
 
 @router.post("/resolve-context", response_model=ResolveContextResponse)
-async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
+async def resolve_context(request: ResolveContextRequest, store: StoreDepends) -> ResolveContextResponse:
     """
     Resolve the scope for a repo and return operational pages.
 
@@ -152,13 +153,13 @@ async def resolve_context(request: ResolveContextRequest, store: StoreDepends):
     return await asyncio.to_thread(_resolve_context_sync, request, store)
 
 
-def _search_sync(request: SearchRequest, store: SearchStore):
+def _search_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
     """Synchronous implementation of search."""
     # BM25 keyword search. Hybrid disabled — see WI-4.
     search_results = store.search(request.query, limit=request.limit * 2)
     doc_cache = store.get_all_documents()
 
-    pages_with_scores = []
+    pages_with_scores: list[tuple[Any, str, float]] = []
 
     for result in search_results:
         content = doc_cache.get(result.file_path)
@@ -168,7 +169,7 @@ def _search_sync(request: SearchRequest, store: SearchStore):
         parsed = parse_page(content)
         pages_with_scores.append((parsed, result.file_path, result.score))
 
-    pages = [(page, path) for page, path, _ in pages_with_scores]
+    pages: list[tuple[Any, str]] = [(page, path) for page, path, _ in pages_with_scores]
 
     if request.mode:
         pages = filter_by_mode(pages, request.mode)
@@ -181,7 +182,7 @@ def _search_sync(request: SearchRequest, store: SearchStore):
 
     pages = pages[:request.limit]
 
-    scores = {path: score for _, path, score in pages_with_scores}
+    scores: dict[str, float] = {path: score for _, path, score in pages_with_scores}
     summaries = to_summaries(pages, scores)
 
     return SearchResponse(
@@ -191,7 +192,7 @@ def _search_sync(request: SearchRequest, store: SearchStore):
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest, store: StoreDepends):
+async def search(request: SearchRequest, store: StoreDepends) -> SearchResponse:
     """
     Full-text and semantic search with progressive disclosure.
 
@@ -201,7 +202,7 @@ async def search(request: SearchRequest, store: StoreDepends):
     return await asyncio.to_thread(_search_sync, request, store)
 
 
-def _get_page_sync(request: GetPageRequest, store: SearchStore):
+def _get_page_sync(request: GetPageRequest, store: SearchStore) -> PageFull:
     """Synchronous implementation of get-page."""
     content = store.get_document(request.id)
 
@@ -213,12 +214,12 @@ def _get_page_sync(request: GetPageRequest, store: SearchStore):
 
 
 @router.post("/get-page", response_model=PageFull)
-async def get_page(request: GetPageRequest, store: StoreDepends):
+async def get_page(request: GetPageRequest, store: StoreDepends) -> PageFull:
     """Retrieve a full page by its identifier (file path or title)."""
     return await asyncio.to_thread(_get_page_sync, request, store)
 
 
-def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
+def _get_related_sync(request: GetRelatedRequest, store: SearchStore) -> GetRelatedResponse:
     """Synchronous implementation of get-related."""
     content = store.get_document(request.id)
 
@@ -238,16 +239,16 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore):
 
 
 @router.post("/get-related", response_model=GetRelatedResponse)
-async def get_related(request: GetRelatedRequest, store: StoreDepends):
+async def get_related(request: GetRelatedRequest, store: StoreDepends) -> GetRelatedResponse:
     """Follow links from a page to find related pages."""
     return await asyncio.to_thread(_get_related_sync, request, store)
 
 
-def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore):
+def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore) -> ListByScopeResponse:
     """Synchronous implementation of list-by-scope."""
     doc_cache = store.get_all_documents()
 
-    all_pages = []
+    all_pages: list[tuple[Any, str]] = []
     for path, content in doc_cache.items():
         if not content:
             continue
@@ -277,7 +278,7 @@ def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore):
 
 
 @router.post("/list-by-scope", response_model=ListByScopeResponse)
-async def list_by_scope(request: ListByScopeRequest, store: StoreDepends):
+async def list_by_scope(request: ListByScopeRequest, store: StoreDepends) -> ListByScopeResponse:
     """List and filter pages by scope, mode, type, and tags."""
     return await asyncio.to_thread(_list_by_scope_sync, request, store)
 
@@ -286,7 +287,7 @@ async def list_by_scope(request: ListByScopeRequest, store: StoreDepends):
 # Write-Path Operations
 # ============================================================================
 
-def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader):
+def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader) -> ValidatePageResponse:
     """Synchronous implementation of validate-page."""
     import frontmatter as fm
 
@@ -295,7 +296,7 @@ def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader):
 
     try:
         post = fm.loads(request.content)
-        metadata = dict(post.metadata)
+        metadata: dict[str, Any] = dict(post.metadata)
     except Exception as e:
         raise parse_error(
             f"Failed to parse YAML frontmatter: {e}",
@@ -309,7 +310,7 @@ def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader):
         valid=result.valid,
         errors=[
             ValidationErrorModel(
-                field=err.field,
+                field=err.field_name,
                 value=err.value,
                 message=err.message,
                 suggestions=err.suggestions,
@@ -318,14 +319,14 @@ def _validate_page_sync(request: ValidatePageRequest, loader: SchemaLoader):
             for err in result.errors
         ],
         warnings=[
-            ValidationWarningModel(field=w.field, message=w.message)
+            ValidationWarningModel(field=w.field_name, message=w.message)
             for w in result.warnings
         ],
     )
 
 
 @router.post("/validate-page", response_model=ValidatePageResponse)
-async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepends):
+async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepends) -> ValidatePageResponse:
     """
     Validate a page against the schema and registries.
 
@@ -335,7 +336,7 @@ async def validate_page(request: ValidatePageRequest, loader: SchemaLoaderDepend
     return await asyncio.to_thread(_validate_page_sync, request, loader)
 
 
-def _suggest_metadata_sync(request: SuggestMetadataRequest, loader: SchemaLoader, store: SearchStore):
+def _suggest_metadata_sync(request: SuggestMetadataRequest, loader: SchemaLoader, store: SearchStore) -> dict[str, Any]:
     """Synchronous implementation of suggest-metadata."""
     if not loader.page_types:
         raise schema_not_loaded("Schema has no page types loaded")
@@ -350,7 +351,7 @@ async def suggest_metadata(
     request: SuggestMetadataRequest,
     loader: SchemaLoaderDepends,
     store: StoreDepends,
-):
+) -> SuggestMetadataResponse:
     """
     Suggest frontmatter metadata for a page.
 
@@ -365,7 +366,7 @@ async def suggest_metadata(
     )
 
 
-def _check_duplicates_sync(request: CheckDuplicatesRequest, store: SearchStore):
+def _check_duplicates_sync(request: CheckDuplicatesRequest, store: SearchStore) -> Any:
     """Synchronous implementation of check-duplicates."""
     try:
         checker = DuplicateChecker(store)
@@ -377,7 +378,7 @@ def _check_duplicates_sync(request: CheckDuplicatesRequest, store: SearchStore):
 
 
 @router.post("/check-duplicates", response_model=CheckDuplicatesResponse)
-async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends):
+async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends) -> CheckDuplicatesResponse:
     """
     Check candidate page content against existing KB pages for overlap.
 
@@ -402,7 +403,7 @@ async def check_duplicates(request: CheckDuplicatesRequest, store: StoreDepends)
     )
 
 
-def _get_schema_sync(loader: SchemaLoader):
+def _get_schema_sync(loader: SchemaLoader) -> dict[str, Any]:
     """Synchronous implementation of get-schema."""
     if not loader.page_types:
         raise schema_not_loaded("Schema has no page types loaded")
@@ -410,7 +411,7 @@ def _get_schema_sync(loader: SchemaLoader):
 
 
 @router.get("/schema", response_model=SchemaResponse)
-async def get_schema_endpoint(loader: SchemaLoaderDepends):
+async def get_schema_endpoint(loader: SchemaLoaderDepends) -> SchemaResponse:
     """
     Return the full schema definition and all registry contents.
 
@@ -421,7 +422,7 @@ async def get_schema_endpoint(loader: SchemaLoaderDepends):
     return SchemaResponse(**schema_dict)
 
 
-def _registry_add_sync(request: RegistryAddRequest, loader: SchemaLoader):
+def _registry_add_sync(request: RegistryAddRequest, loader: SchemaLoader) -> RegistryAddResponse:
     """Synchronous implementation of registry/add."""
     if not loader.registries:
         raise schema_not_loaded("Schema has no registries loaded")
@@ -464,7 +465,7 @@ def _registry_add_sync(request: RegistryAddRequest, loader: SchemaLoader):
 
 
 @router.post("/registry/add", response_model=RegistryAddResponse)
-async def registry_add(request: RegistryAddRequest, loader: SchemaLoaderDepends):
+async def registry_add(request: RegistryAddRequest, loader: SchemaLoaderDepends) -> RegistryAddResponse:
     """
     Add a new entry to a named registry.
 

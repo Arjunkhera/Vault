@@ -32,8 +32,15 @@ class ErrorCode(str, Enum):
     # Service errors (5xx)
     SCHEMA_NOT_LOADED = "SCHEMA_NOT_LOADED"
     SEARCH_FAILED = "SEARCH_FAILED"
+    SEARCH_ERROR = "SEARCH_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    
+    # Validation errors (legacy, used by validator.py)
+    TYPE_NOT_FOUND = "TYPE_NOT_FOUND"
+    REQUIRED_FIELD_MISSING = "REQUIRED_FIELD_MISSING"
+    INVALID_FIELD_VALUE = "INVALID_FIELD_VALUE"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
 
 
 # HTTP status codes for each error code
@@ -46,8 +53,13 @@ ERROR_STATUS_CODES: dict[ErrorCode, int] = {
     ErrorCode.DUPLICATE_ENTRY: 409,
     ErrorCode.SCHEMA_NOT_LOADED: 503,
     ErrorCode.SEARCH_FAILED: 500,
+    ErrorCode.SEARCH_ERROR: 500,
     ErrorCode.INTERNAL_ERROR: 500,
     ErrorCode.SERVICE_UNAVAILABLE: 503,
+    ErrorCode.TYPE_NOT_FOUND: 400,
+    ErrorCode.REQUIRED_FIELD_MISSING: 400,
+    ErrorCode.INVALID_FIELD_VALUE: 400,
+    ErrorCode.VALIDATION_ERROR: 400,
 }
 
 
@@ -94,7 +106,7 @@ class VaultError(Exception):
 
 # Convenience constructors
 
-def validation_error(message: str, details: Optional[dict] = None) -> VaultError:
+def validation_error(message: str, details: Optional[dict[str, Any]] = None) -> VaultError:
     return VaultError(ErrorCode.VALIDATION_FAILED, message, details)
 
 def not_found(resource: str, identifier: str) -> VaultError:
@@ -110,7 +122,7 @@ def schema_not_loaded(reason: str = "Schema directory not found or failed to loa
 def internal_error(message: str = "An internal error occurred") -> VaultError:
     return VaultError(ErrorCode.INTERNAL_ERROR, message)
 
-def parse_error(message: str, details: Optional[dict] = None) -> VaultError:
+def parse_error(message: str, details: Optional[dict[str, Any]] = None) -> VaultError:
     return VaultError(ErrorCode.PARSE_ERROR, message, details)
 
 def registry_not_found(name: str) -> VaultError:
@@ -132,7 +144,7 @@ def duplicate_entry(registry: str, entry_id: str) -> VaultError:
 
 class ValidationError:
     """Legacy validation error class. Use VaultError for new code."""
-    def __init__(self, field: str, code: str, message: str, allowed_values: Optional[list] = None) -> None:
+    def __init__(self, field: str, code: str, message: str, allowed_values: Optional[list[str]] = None) -> None:
         self.field = field
         self.code = code
         self.message = message
@@ -151,11 +163,11 @@ class ValidationResult:
         return len(self.errors) == 0
     
     @classmethod
-    def ok(cls) -> "ValidationResult":
+    def ok(cls) -> ValidationResult:
         return cls()
     
-    def add_error(self, field: str, code: Any, message: str, allowed_values: Optional[list] = None) -> None:
+    def add_error(self, field: str, code: ErrorCode, message: str, allowed_values: Optional[list[str]] = None) -> None:
         self.errors.append(ValidationError(field, str(code), message, allowed_values))
     
-    def add_warning(self, field: str, code: Any, message: str) -> None:
+    def add_warning(self, field: str, code: ErrorCode, message: str) -> None:
         self.warnings.append(ValidationError(field, str(code), message))

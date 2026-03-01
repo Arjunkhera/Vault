@@ -1,0 +1,13 @@
+entries:
+  - id: python
+    description: "Python language"
+  - id: fastapi
+    description: "FastAPI framework"
+  - id: testing
+    description: "Testing and QA"
+  - id: core
+    description: "Core system"
+  - id: backend
+    description: "Backend service"
+  - id: typescript
+    description: "TypeScript language"

@@ -261,11 +261,13 @@ class MetadataSuggester:
             hints.get("type")
             or (result.suggestions["type"].value if isinstance(result.suggestions["type"], FieldSuggestion) else None)
         )
-        pt = self._loader.get_page_type(type_val) if type_val else None
+        # Ensure type_val is a string before passing to get_page_type
+        type_val_str: Optional[str] = str(type_val) if type_val else None
+        pt = self._loader.get_page_type(type_val_str) if type_val_str else None
         allowed_modes = pt.allowed_modes if pt else []
 
         # --- mode ---
-        result.suggestions["mode"] = self._suggest_mode(body, type_val, allowed_modes, hints)
+        result.suggestions["mode"] = self._suggest_mode(body, type_val_str, allowed_modes, hints)
 
         # --- description ---
         result.suggestions["description"] = self._suggest_description(body, hints)

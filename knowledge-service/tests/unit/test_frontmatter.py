@@ -123,14 +123,14 @@ class TestToPageFull:
         assert len(full.related) >= 2
         assert len(full.depends_on) >= 1
 
-    def test_no_auto_generated_in_full(self):
-        """PageFull should not have auto_generated field."""
+    def test_auto_generated_is_none(self):
+        """PageFull.auto_generated should be None (internal field not set for user pages)."""
         page = parse_page(ANVIL_REPO_PROFILE)
         full = to_page_full(page, "repos/anvil.md")
-        assert not hasattr(full, "auto_generated")
+        assert full.auto_generated is None
 
-    def test_no_source_in_full(self):
-        """PageFull should not have source field."""
+    def test_source_is_none(self):
+        """PageFull.source should be None (internal field not set for user pages)."""
         page = parse_page(ANVIL_REPO_PROFILE)
         full = to_page_full(page, "repos/anvil.md")
-        assert not hasattr(full, "source")
+        assert full.source is None

@@ -1,0 +1,32 @@
+version: 1
+page_types:
+  - id: repo-profile
+    description: "Repository profile page"
+    required_fields: [title, description, type, mode]
+    required_scope_fields: [repo]
+    allowed_modes: [reference]
+  - id: guide
+    description: "How-to guide"
+    required_fields: [title, description, type, mode]
+    allowed_modes: [reference, operational]
+  - id: concept
+    description: "Conceptual explanation"
+    required_fields: [title, description, type, mode]
+    allowed_modes: [reference]
+  - id: procedure
+    description: "Step-by-step procedure"
+    required_fields: [title, description, type, mode]
+    allowed_modes: [operational]
+  - id: keystone
+    description: "Keystone architecture document"
+    required_fields: [title, description, type, mode]
+    allowed_modes: [keystone]
+  - id: learning
+    description: "Learning resource"
+    required_fields: [title, description, type, mode]
+    allowed_modes: [reference, operational]
+field_constraints:
+  title:
+    max_length: 120
+  description:
+    max_length: 300
