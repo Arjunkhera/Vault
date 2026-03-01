@@ -4,9 +4,9 @@ FastAPI application entry point for Vault Knowledge Service.
 Sets up the REST API with:
 - QMD adapter initialization
 - Collection setup (shared + workspace)
-- VaultError exception handler
+- Schema loader initialization
 - Health endpoint
-- All 5 query operation endpoints
+- All query and write operation endpoints
 - Lifespan management for startup/shutdown
 """
 
@@ -17,10 +17,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from .errors import VaultError
 from .layer1.qmd_adapter import QMDAdapter
-from .config.type_registry import TypeRegistry
-from .api.routes import router, get_store
+from .layer2.schema import SchemaLoader
+from .api.routes import router, get_store, get_schema_loader
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 
 
@@ -37,9 +36,13 @@ async def lifespan(app: FastAPI):
     """
     Lifespan context manager for FastAPI app.
 
-    Startup: Initialize QMD adapter, setup collections, start sync daemon
-    Shutdown: Cleanup resources
+    Handles startup and shutdown:
+    - Startup: Initialize QMD adapter, setup collections, start sync daemon
+    - Shutdown: Cleanup resources
     """
+    # ============================================================================
+    # STARTUP
+    # ============================================================================
     logger.info("Starting Vault Knowledge Service...")
 
     # Read environment variables
@@ -47,11 +50,10 @@ async def lifespan(app: FastAPI):
     knowledge_repo_path = os.getenv("KNOWLEDGE_REPO_PATH", "/data/knowledge-repo")
     workspace_path = os.getenv("WORKSPACE_PATH", "/workspace")
     sync_interval = int(os.getenv("SYNC_INTERVAL", "300"))
-    types_path = os.getenv("VAULT_TYPES_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "types"))
 
     logger.info(
-        "Configuration: QMD_INDEX=%s, KNOWLEDGE_REPO=%s, WORKSPACE=%s, SYNC_INTERVAL=%ds, TYPES=%s",
-        qmd_index_name, knowledge_repo_path, workspace_path, sync_interval, types_path
+        "Configuration: QMD_INDEX=%s, KNOWLEDGE_REPO=%s, WORKSPACE=%s, SYNC_INTERVAL=%ds",
+        qmd_index_name, knowledge_repo_path, workspace_path, sync_interval
     )
 
     # Initialize QMD adapter
@@ -70,23 +72,21 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to setup collections: %s", e)
         raise
 
-    # Load type registry
-    logger.info("Loading type definitions...")
-    type_registry = TypeRegistry()
-    try:
-        type_registry.load_from_directory(types_path)
-        logger.info(
-            "Type registry loaded: %d types (%s)",
-            len(type_registry.type_ids()),
-            ", ".join(type_registry.type_ids())
-        )
-    except Exception as e:
-        logger.error("Failed to load type definitions: %s", e)
-        raise
-
-    # Store adapter and type registry in app state for dependency injection
+    # Store adapter in app state for dependency injection
     app.state.store = adapter
-    app.state.type_registry = type_registry
+
+    # Load schema + registries from _schema/ directory in knowledge repo
+    schema_dir = os.path.join(knowledge_repo_path, "_schema")
+    logger.info("Loading schema from %s ...", schema_dir)
+    schema_loader = SchemaLoader(schema_dir)
+    try:
+        schema_loader.load()
+        logger.info("Schema loaded successfully")
+    except Exception as e:
+        logger.warning("Schema load failed (write-path will be degraded): %s", e)
+        # Non-fatal — read path still works without schema
+
+    app.state.schema_loader = schema_loader
 
     # Start sync daemon (git pull loop + workspace watcher)
     logger.info("Starting sync daemon...")
@@ -105,7 +105,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown
+    # ============================================================================
+    # SHUTDOWN
+    # ============================================================================
     logger.info("Shutting down Vault Knowledge Service...")
     await stop_sync_daemon(
         git_pull_task=app.state.git_pull_task,
@@ -114,7 +116,7 @@ async def lifespan(app: FastAPI):
     logger.info("Vault Knowledge Service shutdown complete")
 
 
-# Create FastAPI app
+# Create FastAPI app with lifespan
 app = FastAPI(
     title="Vault Knowledge Service",
     description="Shared knowledge layer — curated documentation, repo profiles, architecture, conventions",
@@ -123,41 +125,21 @@ app = FastAPI(
 )
 
 
-# Global exception handler for VaultError
-@app.exception_handler(VaultError)
-async def vault_error_handler(request: Request, exc: VaultError):
-    """Convert VaultError to structured JSON response."""
-    logger.warning("VaultError [%s]: %s", exc.code.value, exc.message)
-    return JSONResponse(
-        status_code=_error_status_code(exc),
-        content=exc.to_dict()
-    )
-
-
-def _error_status_code(exc: VaultError) -> int:
-    """Map error codes to HTTP status codes."""
-    from .errors import ErrorCode
-    mapping = {
-        ErrorCode.PAGE_NOT_FOUND: 404,
-        ErrorCode.TYPE_NOT_FOUND: 404,
-        ErrorCode.VALIDATION_ERROR: 422,
-        ErrorCode.REQUIRED_FIELD_MISSING: 422,
-        ErrorCode.INVALID_FIELD_VALUE: 422,
-        ErrorCode.SCOPE_INVALID: 422,
-        ErrorCode.SEARCH_ERROR: 502,
-        ErrorCode.SYNC_ERROR: 502,
-        ErrorCode.INDEX_ERROR: 502,
-    }
-    return mapping.get(exc.code, 500)
-
-
-# Override get_store dependency to use app.state.store
+# Override the get_store dependency to use app.state.store
 def get_store_override(request: Request):
     """Dependency override to inject SearchStore from app state."""
     return request.app.state.store
 
 
 app.dependency_overrides[get_store] = get_store_override
+
+
+def get_schema_loader_override(request: Request):
+    """Dependency override to inject SchemaLoader from app state."""
+    return request.app.state.schema_loader
+
+
+app.dependency_overrides[get_schema_loader] = get_schema_loader_override
 
 # Include API routes
 app.include_router(router, prefix="", tags=["knowledge"])
@@ -191,6 +173,7 @@ async def health_check(request: Request):
         )
 
 
+
 @app.get("/")
 async def root():
     """Root endpoint with API information."""
@@ -204,7 +187,12 @@ async def root():
             "search": "POST /search",
             "get_page": "POST /get-page",
             "get_related": "POST /get-related",
-            "list_by_scope": "POST /list-by-scope"
+            "list_by_scope": "POST /list-by-scope",
+            "validate_page": "POST /validate-page",
+            "suggest_metadata": "POST /suggest-metadata",
+            "check_duplicates": "POST /check-duplicates",
+            "schema": "GET /schema",
+            "registry_add": "POST /registry/add"
         },
         "docs": "/docs"
     }
