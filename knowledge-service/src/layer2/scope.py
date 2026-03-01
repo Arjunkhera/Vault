@@ -38,7 +38,11 @@ class Scope:
         }.items() if v is not None}
 
 
-def resolve_scope(repo: str, store: SearchStore) -> Scope:
+def resolve_scope(
+    repo: str,
+    store: SearchStore,
+    doc_cache: Optional[dict[str, str]] = None,
+) -> Scope:
     """
     Resolve the program for a repository.
 
@@ -49,13 +53,19 @@ def resolve_scope(repo: str, store: SearchStore) -> Scope:
     4. Return Scope(program=..., repo=repo)
 
     Returns partial Scope if repo-profile not found (program will be None).
+    When doc_cache is provided, reads from the cache instead of spawning
+    per-result get_document subprocesses.
     """
     scope = Scope(repo=repo)
 
     results = store.search(repo, limit=20)
 
     for result in results:
-        content = store.get_document(result.file_path)
+        content = (
+            doc_cache.get(result.file_path)
+            if doc_cache is not None
+            else store.get_document(result.file_path)
+        )
         if not content:
             continue
 
@@ -78,6 +88,7 @@ def resolve_scope(repo: str, store: SearchStore) -> Scope:
 def collect_operational_pages(
     scope: Scope,
     store: SearchStore,
+    doc_cache: Optional[dict[str, str]] = None,
 ) -> list[tuple[ParsedPage, str]]:
     """
     Collect all operational pages applicable to the scope.
@@ -89,12 +100,17 @@ def collect_operational_pages(
 
     Returns list of (ParsedPage, file_path) tuples sorted by
     specificity descending (repo-level first, program-level second).
+    When doc_cache is provided, avoids the N+1 list_documents + get_document
+    subprocess calls.
     """
-    all_paths = store.list_documents()
     applicable: list[tuple[ParsedPage, str, int]] = []
 
-    for path in all_paths:
-        content = store.get_document(path)
+    if doc_cache is not None:
+        items: object = doc_cache.items()
+    else:
+        items = ((p, store.get_document(p)) for p in store.list_documents())
+
+    for path, content in items:  # type: ignore[union-attr]
         if not content:
             continue
 

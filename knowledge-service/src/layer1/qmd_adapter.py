@@ -10,7 +10,9 @@ index from the user's personal QMD index.
 
 import json
 import logging
+import os
 import subprocess
+from pathlib import Path
 from typing import Optional
 
 from .interface import SearchStore, SearchResult, Document
@@ -30,8 +32,12 @@ class QMDAdapter(SearchStore):
     Database location: ~/.cache/qmd/{index_name}.sqlite
     """
 
+    # Maps collection name → filesystem root (set during ensure_collections)
+    _collection_paths: dict[str, str]
+
     def __init__(self, index_name: str = "knowledge"):
         self.index_name = index_name
+        self._collection_paths = {}
 
     def _run_qmd(self, args: list[str], check: bool = True) -> str:
         """
@@ -168,6 +174,42 @@ class QMDAdapter(SearchStore):
                 all_files.extend(self.list_documents(coll))
             return all_files
 
+    def get_all_documents(self) -> dict[str, str]:
+        """
+        Read every indexed document from disk (no QMD subprocess needed).
+
+        Maps qmd:// URIs to filesystem paths using the collection root
+        directories recorded during ensure_collections().  Falls back to
+        the base-class implementation (get_documents_by_glob) if the
+        collection paths aren't available.
+        """
+        if not self._collection_paths:
+            return super().get_all_documents()
+
+        all_paths = self.list_documents()
+        cache: dict[str, str] = {}
+
+        for qmd_path in all_paths:
+            # qmd_path looks like "qmd://shared/some-file.md"
+            if not qmd_path.startswith("qmd://"):
+                continue
+            rest = qmd_path[len("qmd://"):]          # "shared/some-file.md"
+            slash = rest.find("/")
+            if slash == -1:
+                continue
+            collection = rest[:slash]                 # "shared"
+            relative = rest[slash + 1:]               # "some-file.md"
+            root = self._collection_paths.get(collection)
+            if not root:
+                continue
+            disk_path = os.path.join(root, relative)
+            try:
+                cache[qmd_path] = Path(disk_path).read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                pass
+
+        return cache
+
     def reindex(self) -> None:
         """Trigger full re-index: update + embed."""
         try:
@@ -206,6 +248,11 @@ class QMDAdapter(SearchStore):
 
         Idempotent — safe to call multiple times.
         """
+        self._collection_paths = {
+            "shared": shared_path,
+            "workspace": workspace_path,
+        }
+
         try:
             output = self._run_qmd(["collection", "list"])
             existing_collections = output.lower()

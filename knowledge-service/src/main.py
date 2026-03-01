@@ -5,11 +5,12 @@ Sets up the REST API with:
 - QMD adapter initialization
 - Collection setup (shared + workspace)
 - Schema loader initialization
-- Health endpoint
+- Health and status endpoints
 - All query and write operation endpoints
 - Lifespan management for startup/shutdown
 """
 
+import asyncio
 import os
 import logging
 from contextlib import asynccontextmanager
@@ -146,28 +147,40 @@ app.include_router(router, prefix="", tags=["knowledge"])
 
 
 @app.get("/health")
-async def health_check(request: Request):
-    """Health check endpoint."""
+async def health_check():
+    """
+    Lightweight health check — no QMD subprocess, no I/O.
+    Use GET /status for full QMD index diagnostics.
+    """
+    return {"status": "ok", "service": "knowledge-service", "version": "0.1.0"}
+
+
+@app.get("/status")
+async def full_status(request: Request):
+    """
+    Full QMD index status (slow — spawns qmd subprocess).
+    Separated from /health so liveness probes stay fast.
+    """
     try:
         store = request.app.state.store
-        index_status = store.status()
+        index_status = await asyncio.to_thread(store.status)
         return JSONResponse(
             status_code=200,
             content={
                 "status": "ok",
-                "service": "vault-knowledge-service",
-                "version": "0.2.0",
+                "service": "knowledge-service",
+                "version": "0.1.0",
                 "index": index_status
             }
         )
     except Exception as e:
-        logger.error("Health check failed: %s", e)
+        logger.error("Status check failed: %s", e)
         return JSONResponse(
             status_code=503,
             content={
                 "status": "error",
-                "service": "vault-knowledge-service",
-                "version": "0.2.0",
+                "service": "knowledge-service",
+                "version": "0.1.0",
                 "error": str(e)
             }
         )
@@ -183,6 +196,7 @@ async def root():
         "description": "Shared knowledge layer — curated documentation, repo profiles, architecture, conventions",
         "endpoints": {
             "health": "GET /health",
+            "status": "GET /status",
             "resolve_context": "POST /resolve-context",
             "search": "POST /search",
             "get_page": "POST /get-page",

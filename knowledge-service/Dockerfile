@@ -16,6 +16,18 @@ RUN git clone https://github.com/tobi/qmd.git /opt/qmd \
     && cd /opt/qmd \
     && npm install \
     && npm run build
+
+# Patch QMD: force gpu:false to skip CUDA auto-detection.
+# Podman/QEMU falsely reports CUDA available, triggering an ~8s cmake build
+# probe that always fails before falling back to the CPU prebuilt (~160ms).
+RUN sed -i '/async ensureLlama() {/,/return this\.llama;/{
+  /if (!this\.llama) {/,/return this\.llama;/c\
+        if (!this.llama) {\
+            this.llama = await getLlama({ gpu: false, logLevel: LlamaLogLevel.error });\
+        }\
+        return this.llama;
+}' /opt/qmd/dist/llm.js
+
 ENV PATH="/opt/qmd:${PATH}"
 
 WORKDIR /app
@@ -24,7 +36,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
-COPY types/ ./types/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
@@ -32,11 +43,8 @@ RUN mkdir -p /data/knowledge-repo /workspace
 
 EXPOSE 8000
 
-ENV KNOWLEDGE_REPO_URL=""
-ENV KNOWLEDGE_REPO_PATH=/data/knowledge-repo
-ENV WORKSPACE_PATH=/workspace
+ENV KNOWLEDGE_REPO=akhera/knowledge-base
 ENV SYNC_INTERVAL=300
 ENV QMD_INDEX_NAME=knowledge
-ENV VAULT_TYPES_PATH=/app/types
 
 CMD ["./entrypoint.sh"]
