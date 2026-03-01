@@ -1,14 +1,40 @@
+version: '3.8'
+
 services:
   knowledge-service:
     build: .
     ports:
       - "8000:8000"
-    volumes:
-      - ~/workspace:/workspace:ro
-      # Optional: mount custom type definitions
-      # - ./types:/app/types:ro
-    environment:
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - KNOWLEDGE_REPO_URL=${KNOWLEDGE_REPO_URL:-}
-      - SYNC_INTERVAL=300
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # Knowledge base repo (read-only)
+      - ${KNOWLEDGE_REPO_PATH:-/data/knowledge-repo}:/data/knowledge-repo:ro
+      # Workspace for write-path staging
+      - ${WORKSPACE_PATH:-/data/workspace}:/data/workspace
+    environment:
+      # Required: path to knowledge-base repo (inside container)
+      - KNOWLEDGE_REPO_PATH=/data/knowledge-repo
+      # Required: path to workspace for write-path staging
+      - WORKSPACE_PATH=/data/workspace
+      # Optional: GitHub token for private repo cloning
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      # Optional: knowledge repo URL (if not volume-mounted)
+      - KNOWLEDGE_REPO_URL=${KNOWLEDGE_REPO_URL:-}
+      # Optional: skip automatic git clone
+      - SKIP_GIT_CLONE=${SKIP_GIT_CLONE:-false}
+      # Optional: QMD index name (default: knowledge)
+      - QMD_INDEX_NAME=${QMD_INDEX_NAME:-knowledge}
+      # Optional: sync interval in seconds (default: 300)
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
+      # Optional: log level (default: info)
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      # Optional: uvicorn host (default: 0.0.0.0)
+      - HOST=${HOST:-0.0.0.0}
+      # Optional: uvicorn port (default: 8000)
+      - PORT=${PORT:-8000}
