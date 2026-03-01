@@ -8,20 +8,25 @@ Sets up the REST API with:
 - Health and status endpoints
 - All query and write operation endpoints
 - Lifespan management for startup/shutdown
+- Structured error handling with VaultError
+- Request ID tracking
 """
 
 import asyncio
-import os
 import logging
+import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from .config.settings import load_settings
 from .layer1.qmd_adapter import QMDAdapter
 from .layer2.schema import SchemaLoader
 from .api.routes import router, get_store, get_schema_loader
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
+from .errors import VaultError, VaultErrorResponse, VaultErrorDetail, ErrorCode
 
 
 # Configure logging
@@ -46,27 +51,22 @@ async def lifespan(app: FastAPI):
     # ============================================================================
     logger.info("Starting Vault Knowledge Service...")
 
-    # Read environment variables
-    qmd_index_name = os.getenv("QMD_INDEX_NAME", "knowledge")
-    knowledge_repo_path = os.getenv("KNOWLEDGE_REPO_PATH", "/data/knowledge-repo")
-    workspace_path = os.getenv("WORKSPACE_PATH", "/workspace")
-    sync_interval = int(os.getenv("SYNC_INTERVAL", "300"))
+    # Load configuration (CLI > env > config file > defaults)
+    settings, sources = load_settings()
 
-    logger.info(
-        "Configuration: QMD_INDEX=%s, KNOWLEDGE_REPO=%s, WORKSPACE=%s, SYNC_INTERVAL=%ds",
-        qmd_index_name, knowledge_repo_path, workspace_path, sync_interval
-    )
+    logger.info("Vault configuration resolved:")
+    settings.log_sources(sources)
 
     # Initialize QMD adapter
     logger.info("Initializing QMD adapter...")
-    adapter = QMDAdapter(index_name=qmd_index_name)
+    adapter = QMDAdapter(index_name=settings.qmd_index_name)
 
     # Setup collections (idempotent)
     logger.info("Setting up QMD collections...")
     try:
         adapter.ensure_collections(
-            shared_path=knowledge_repo_path,
-            workspace_path=workspace_path
+            shared_path=settings.knowledge_repo_path,
+            workspace_path=settings.workspace_path
         )
         logger.info("Collections setup complete")
     except Exception as e:
@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
     app.state.store = adapter
 
     # Load schema + registries from _schema/ directory in knowledge repo
-    schema_dir = os.path.join(knowledge_repo_path, "_schema")
+    schema_dir = f"{settings.knowledge_repo_path}/_schema"
     logger.info("Loading schema from %s ...", schema_dir)
     schema_loader = SchemaLoader(schema_dir)
     try:
@@ -93,9 +93,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting sync daemon...")
     git_pull_task, workspace_observer = await start_sync_daemon(
         store=adapter,
-        knowledge_repo_path=knowledge_repo_path,
-        workspace_path=workspace_path,
-        sync_interval=sync_interval,
+        knowledge_repo_path=settings.knowledge_repo_path,
+        workspace_path=settings.workspace_path,
+        sync_interval=settings.sync_interval,
         debounce_seconds=5.0
     )
 
@@ -124,6 +124,50 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan
 )
+
+
+# ============================================================================
+# Exception Handlers
+# ============================================================================
+
+@app.exception_handler(VaultError)
+async def vault_error_handler(request: Request, exc: VaultError) -> JSONResponse:
+    """Handle VaultError exceptions with structured error response."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_response().model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle unexpected exceptions with generic error response."""
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    request_id = str(uuid.uuid4())
+    return JSONResponse(
+        status_code=500,
+        content=VaultErrorResponse(
+            error=VaultErrorDetail(
+                code=ErrorCode.INTERNAL_ERROR.value,
+                message="An internal error occurred",
+                request_id=request_id,
+            )
+        ).model_dump(),
+    )
+
+
+# ============================================================================
+# Middleware
+# ============================================================================
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    """Add a unique request ID to each request."""
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 
 # Override the get_store dependency to use app.state.store
@@ -213,5 +257,43 @@ async def root():
 
 
 if __name__ == "__main__":
+    import argparse
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+
+    parser = argparse.ArgumentParser(description="Vault Knowledge Service")
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="Server port (default: 8000)"
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=None,
+        help="Server host (default: 0.0.0.0)"
+    )
+    parser.add_argument(
+        "--knowledge-repo",
+        type=str,
+        default=None,
+        help="Path to knowledge repository"
+    )
+    parser.add_argument(
+        "--workspace",
+        type=str,
+        default=None,
+        help="Path to workspace directory"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config file"
+    )
+    args = parser.parse_args()
+
+    host = args.host or "0.0.0.0"
+    port = args.port or 8000
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
