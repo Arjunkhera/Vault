@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class ValidationError:
     """A validation failure that must be fixed before a page is accepted."""
     field: str
-    value: Optional[str | list] = None
+    value: str | list[Any] | None = None
     message: str = ""
     suggestions: list[str] = field(default_factory=list)
     action_required: str = "provide_value"  # pick_or_add | provide_value | fix_format | fix_constraint
@@ -84,11 +84,11 @@ class SchemaLoader:
         tags = loader.get_registry("tags")
     """
 
-    def __init__(self, schema_dir: str | Path):
+    def __init__(self, schema_dir: str | Path) -> None:
         self._schema_dir = Path(schema_dir)
         self._version: int = 0
         self._page_types: dict[str, PageTypeDefinition] = {}
-        self._field_constraints: dict = {}
+        self._field_constraints: dict[str, Any] = {}
         self._registries: dict[str, list[RegistryEntry]] = {}
 
     # -- public API ----------------------------------------------------------
@@ -103,7 +103,7 @@ class SchemaLoader:
         logger.info("Reloading schema and registries from %s", self._schema_dir)
         self.load()
 
-    def get_schema(self) -> dict:
+    def get_schema(self) -> dict[str, Any]:
         """Return the full schema as a JSON-serialisable dict."""
         return {
             "version": self._version,
@@ -140,12 +140,20 @@ class SchemaLoader:
         return list(self._page_types.keys())
 
     @property
-    def field_constraints(self) -> dict:
+    def field_constraints(self) -> dict[str, Any]:
         return self._field_constraints
 
     @property
     def version(self) -> int:
         return self._version
+
+    @property
+    def page_types(self) -> dict[str, PageTypeDefinition]:
+        return self._page_types
+
+    @property
+    def registries(self) -> dict[str, list[RegistryEntry]]:
+        return self._registries
 
     # -- registry mutation (for /registry/add) --------------------------------
 
@@ -174,10 +182,19 @@ class SchemaLoader:
             return
 
         with open(schema_file) as f:
-            raw = yaml.safe_load(f)
+            raw: dict[str, Any] = yaml.safe_load(f) or {}
 
         self._version = raw.get("version", 0)
-        self._field_constraints = raw.get("field_constraints", {})
+        
+        # Convert field_constraints from list to dict format
+        # YAML has: [{"field": "title", "max_length": 120}, ...]
+        # We need: {"title": {"max_length": 120}, ...}
+        constraints_list: list[dict[str, Any]] = raw.get("field_constraints", [])
+        self._field_constraints = {}
+        for constraint in constraints_list:
+            constraint_copy = constraint.copy()
+            field_name: str = constraint_copy.pop("field")
+            self._field_constraints[field_name] = constraint_copy
 
         self._page_types = {}
         for pt_raw in raw.get("page_types", []):
@@ -206,7 +223,7 @@ class SchemaLoader:
         for reg_file in sorted(reg_dir.glob("*.yaml")):
             name = reg_file.stem  # e.g. "tags", "programs"
             with open(reg_file) as f:
-                raw = yaml.safe_load(f) or {}
+                raw: dict[str, Any] = yaml.safe_load(f) or {}
 
             entries: list[RegistryEntry] = []
             for item in raw.get(name, []):
@@ -223,7 +240,7 @@ class SchemaLoader:
         """Write a registry back to its YAML file."""
         reg_file = self._schema_dir / "registries" / f"{name}.yaml"
         entries = self._registries.get(name, [])
-        data = {
+        data: dict[str, Any] = {
             name: [
                 {"id": e.id, "description": e.description}
                 | ({"aliases": e.aliases} if e.aliases else {})
@@ -297,10 +314,10 @@ class PageValidator:
         result = validator.validate(frontmatter_dict)
     """
 
-    def __init__(self, loader: SchemaLoader):
+    def __init__(self, loader: SchemaLoader) -> None:
         self._loader = loader
 
-    def validate(self, metadata: dict) -> ValidationResult:
+    def validate(self, metadata: dict[str, Any]) -> ValidationResult:
         """
         Run all validation checks on a frontmatter dict.
 
@@ -470,7 +487,7 @@ class PageValidator:
 
     def _check_registry_list(
         self,
-        metadata: dict,
+        metadata: dict[str, Any],
         field_name: str,
         registry_name: str,
         errors: list[ValidationError],
@@ -504,7 +521,7 @@ class PageValidator:
 
     def _check_registry_scalar(
         self,
-        container: dict,
+        container: dict[str, Any],
         field_name: str,
         registry_name: str,
         display_field: str,
