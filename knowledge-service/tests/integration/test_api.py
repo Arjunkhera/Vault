@@ -7,18 +7,35 @@ Creates a separate FastAPI app without the lifespan (which requires QMD).
 
 import pytest
 from contextlib import asynccontextmanager
+from unittest.mock import Mock, patch, MagicMock
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 
 from src.errors import VaultError
-from src.api.routes import router, get_store
+from src.api.routes import router, get_store, get_settings, get_schema_loader
+from src.config.settings import VaultSettings
+from src.layer2.schema import SchemaLoader
 from tests.conftest import MockSearchStore, SAMPLE_PAGES
 
 
-def _create_test_app() -> tuple[FastAPI, MockSearchStore]:
+def _create_test_app() -> tuple[FastAPI, MockSearchStore, VaultSettings, SchemaLoader]:
     """Create a test FastAPI app with MockSearchStore, no lifespan."""
     mock_store = MockSearchStore(documents=dict(SAMPLE_PAGES))
+
+    # Create mock settings with GitHub config
+    mock_settings = VaultSettings(
+        knowledge_repo_path="/tmp/knowledge-repo",
+        workspace_path="/tmp/workspace",
+        github_token="test-token",
+        github_repo="test-owner/test-repo",
+        github_base_branch="master",
+    )
+
+    # Create a mock schema loader
+    mock_schema_loader = Mock(spec=SchemaLoader)
+    mock_schema_loader.page_types = ["repo-profile", "guide", "concept", "procedure", "keystone", "learning"]
+    mock_schema_loader.registries = {"tags": [], "repos": [], "programs": []}
 
     test_app = FastAPI(title="Vault Knowledge Service Test")
 
@@ -32,9 +49,19 @@ def _create_test_app() -> tuple[FastAPI, MockSearchStore]:
     def get_store_override():
         return mock_store
 
+    def get_settings_override():
+        return mock_settings
+
+    def get_schema_loader_override():
+        return mock_schema_loader
+
     test_app.dependency_overrides[get_store] = get_store_override
+    test_app.dependency_overrides[get_settings] = get_settings_override
+    test_app.dependency_overrides[get_schema_loader] = get_schema_loader_override
     test_app.include_router(router, prefix="", tags=["knowledge"])
     test_app.state.store = mock_store
+    test_app.state.settings = mock_settings
+    test_app.state.schema_loader = mock_schema_loader
 
     @test_app.get("/health")
     async def health_check(request: Request):
@@ -63,13 +90,13 @@ def _create_test_app() -> tuple[FastAPI, MockSearchStore]:
             },
         }
 
-    return test_app, mock_store
+    return test_app, mock_store, mock_settings, mock_schema_loader
 
 
 @pytest.fixture
 def client():
     """Create a test client with MockSearchStore injected."""
-    test_app, _ = _create_test_app()
+    test_app, _, _, _ = _create_test_app()
     with TestClient(test_app) as client:
         yield client
 
@@ -267,3 +294,129 @@ class TestListByScope:
         })
         assert response.status_code == 200
         data = response.json()
+
+
+class TestWritePage:
+    """Tests for the /write-page endpoint (write-path pipeline completion)."""
+
+    def test_write_page_invalid_frontmatter(self, client):
+        """Invalid YAML frontmatter should return PARSE_ERROR."""
+        content = """---
+type: guide
+title: Bad Page
+description: Invalid YAML: {unclosed
+---
+# Bad Page
+"""
+        response = client.post("/write-page", json={
+            "path": "guides/bad-page.md",
+            "content": content,
+        })
+
+        assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["code"] == "PARSE_ERROR"
+
+    def test_write_page_missing_github_token(self, client):
+        """Missing GitHub token should return VALIDATION_FAILED."""
+        content = """---
+type: guide
+title: Test
+description: Test
+mode: operational
+---
+# Test
+"""
+        test_app, _, settings, schema_loader = _create_test_app()
+        settings.github_token = ""  # Clear token
+
+        def override_settings():
+            return settings
+
+        test_app.dependency_overrides[get_settings] = override_settings
+
+        with TestClient(test_app) as test_client:
+            response = test_client.post("/write-page", json={
+                "path": "guides/test.md",
+                "content": content,
+            })
+
+        assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_write_page_missing_github_repo(self, client):
+        """Missing GitHub repo should return VALIDATION_FAILED."""
+        content = """---
+type: guide
+title: Test
+description: Test
+mode: operational
+---
+# Test
+"""
+        test_app, _, settings, schema_loader = _create_test_app()
+        settings.github_repo = ""  # Clear repo
+
+        def override_settings():
+            return settings
+
+        test_app.dependency_overrides[get_settings] = override_settings
+
+        with TestClient(test_app) as test_client:
+            response = test_client.post("/write-page", json={
+                "path": "guides/test.md",
+                "content": content,
+            })
+
+        assert response.status_code == 400
+        data = response.json()
+        assert data["error"]["code"] == "VALIDATION_FAILED"
+
+    def test_write_page_git_failure(self, client):
+        """Git command failure should return GIT_ERROR."""
+        from src.errors import git_error
+
+        content = """---
+type: guide
+title: Test
+description: Test
+mode: operational
+---
+# Test
+"""
+        with patch("src.api.routes._write_page_sync") as mock_sync:
+            mock_sync.side_effect = git_error("Git command failed")
+
+            response = client.post("/write-page", json={
+                "path": "guides/test.md",
+                "content": content,
+            })
+
+        assert response.status_code == 500
+        data = response.json()
+        assert data["error"]["code"] == "GIT_ERROR"
+
+    def test_write_page_github_api_failure(self, client):
+        """GitHub API failure should return GITHUB_API_ERROR."""
+        from src.errors import github_api_error
+
+        content = """---
+type: guide
+title: Test
+description: Test
+mode: operational
+---
+# Test
+"""
+        with patch("src.api.routes._write_page_sync") as mock_sync:
+            mock_sync.side_effect = github_api_error("GitHub API returned 401")
+
+            response = client.post("/write-page", json={
+                "path": "guides/test.md",
+                "content": content,
+            })
+
+        assert response.status_code == 500
+        data = response.json()
+        assert data["error"]["code"] == "GITHUB_API_ERROR"

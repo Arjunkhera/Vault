@@ -266,6 +266,23 @@ const TOOLS: Tool[] = [
       required: ["registry", "entry"],
     },
   },
+  {
+    name: "knowledge_write_page",
+    description:
+      "Write a validated knowledge page to the knowledge-base repo, commit it to a new branch, " +
+      "and open a GitHub PR for human review. Returns the PR URL.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Relative page path, e.g. 'repos/anvil.md'" },
+        content: { type: "string", description: "Full markdown content with YAML frontmatter" },
+        commit_message: { type: "string", description: "Git commit message (optional)" },
+        pr_title: { type: "string", description: "GitHub PR title (optional)" },
+        pr_body: { type: "string", description: "GitHub PR description body (optional)" },
+      },
+      required: ["path", "content"],
+    },
+  },
 ];
 
 // ── Server factory ────────────────────────────────────────────────────────────
@@ -343,6 +360,15 @@ function buildServer(): Server {
           result = await callKnowledgeAPI("/registry/add", {
             registry: toolArgs.registry,
             entry: toolArgs.entry,
+          });
+          break;
+        case "knowledge_write_page":
+          result = await callKnowledgeAPI("/write-page", {
+            path: toolArgs.path,
+            content: toolArgs.content,
+            commit_message: toolArgs.commit_message,
+            pr_title: toolArgs.pr_title,
+            pr_body: toolArgs.pr_body,
           });
           break;
         default:

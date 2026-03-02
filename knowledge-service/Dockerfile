@@ -81,6 +81,7 @@ COPY --from=builder /build/deps /usr/local/lib/python3.12/site-packages/
 
 # Copy application code
 COPY src/ ./src/
+COPY defaults/ ./defaults/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

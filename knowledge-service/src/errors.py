@@ -28,14 +28,16 @@ class ErrorCode(str, Enum):
     REGISTRY_NOT_FOUND = "REGISTRY_NOT_FOUND"
     DUPLICATE_ENTRY = "DUPLICATE_ENTRY"
     INVALID_REQUEST = "INVALID_REQUEST"
-    
+
     # Service errors (5xx)
     SCHEMA_NOT_LOADED = "SCHEMA_NOT_LOADED"
     SEARCH_FAILED = "SEARCH_FAILED"
     SEARCH_ERROR = "SEARCH_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
-    
+    GIT_ERROR = "GIT_ERROR"
+    GITHUB_API_ERROR = "GITHUB_API_ERROR"
+
     # Validation errors (legacy, used by validator.py)
     TYPE_NOT_FOUND = "TYPE_NOT_FOUND"
     REQUIRED_FIELD_MISSING = "REQUIRED_FIELD_MISSING"
@@ -56,6 +58,8 @@ ERROR_STATUS_CODES: dict[ErrorCode, int] = {
     ErrorCode.SEARCH_ERROR: 500,
     ErrorCode.INTERNAL_ERROR: 500,
     ErrorCode.SERVICE_UNAVAILABLE: 503,
+    ErrorCode.GIT_ERROR: 500,
+    ErrorCode.GITHUB_API_ERROR: 500,
     ErrorCode.TYPE_NOT_FOUND: 400,
     ErrorCode.REQUIRED_FIELD_MISSING: 400,
     ErrorCode.INVALID_FIELD_VALUE: 400,
@@ -138,6 +142,12 @@ def duplicate_entry(registry: str, entry_id: str) -> VaultError:
         f"Entry '{entry_id}' already exists in registry '{registry}'",
         {"registry": registry, "entry_id": entry_id},
     )
+
+def git_error(message: str, details: Optional[dict[str, Any]] = None) -> VaultError:
+    return VaultError(ErrorCode.GIT_ERROR, message, details=details)
+
+def github_api_error(message: str, details: Optional[dict[str, Any]] = None) -> VaultError:
+    return VaultError(ErrorCode.GITHUB_API_ERROR, message, details=details)
 
 
 # --- Legacy compatibility (used by validator.py) ---

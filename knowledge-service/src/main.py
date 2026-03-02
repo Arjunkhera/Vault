@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from .config.settings import load_settings
 from .layer1.qmd_adapter import QMDAdapter
 from .layer2.schema import SchemaLoader
-from .api.routes import router, get_store, get_schema_loader
+from .api.routes import router, get_store, get_schema_loader, get_settings
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 from .errors import VaultError, VaultErrorResponse, VaultErrorDetail, ErrorCode
 
@@ -75,6 +75,9 @@ async def lifespan(app: FastAPI):
 
     # Store adapter in app state for dependency injection
     app.state.store = adapter
+
+    # Store settings in app state for dependency injection (write-path operations)
+    app.state.settings = settings
 
     # Load schema + registries from _schema/ directory in knowledge repo
     schema_dir = f"{settings.knowledge_repo_path}/_schema"
@@ -186,6 +189,14 @@ def get_schema_loader_override(request: Request):
 
 app.dependency_overrides[get_schema_loader] = get_schema_loader_override
 
+
+def get_settings_override(request: Request):
+    """Dependency override to inject VaultSettings from app state."""
+    return request.app.state.settings
+
+
+app.dependency_overrides[get_settings] = get_settings_override
+
 # Include API routes
 app.include_router(router, prefix="", tags=["knowledge"])
 
@@ -250,7 +261,8 @@ async def root():
             "suggest_metadata": "POST /suggest-metadata",
             "check_duplicates": "POST /check-duplicates",
             "schema": "GET /schema",
-            "registry_add": "POST /registry/add"
+            "registry_add": "POST /registry/add",
+            "write_page": "POST /write-page"
         },
         "docs": "/docs"
     }

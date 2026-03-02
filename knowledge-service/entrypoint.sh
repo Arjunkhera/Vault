@@ -66,6 +66,29 @@ if [ -n "$VAULT_KNOWLEDGE_REPO_URL" ] && [ ! -d "$KNOWLEDGE_REPO_PATH/.git" ]; t
   log "Knowledge repo cloned successfully"
 fi
 
+# Configure git credentials and identity for any push operations
+if [ -n "$GITHUB_TOKEN" ] && [ -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
+  git -C "$KNOWLEDGE_REPO_PATH" config credential.helper "store"
+  echo "https://oauth2:${GITHUB_TOKEN}@github.com" > ~/.git-credentials
+fi
+git -C "$KNOWLEDGE_REPO_PATH" config user.email "horus@local" 2>/dev/null || true
+git -C "$KNOWLEDGE_REPO_PATH" config user.name "Horus Vault Sync" 2>/dev/null || true
+
+# Bootstrap _schema/ from defaults if schema.yaml is missing
+if [ ! -f "$KNOWLEDGE_REPO_PATH/_schema/schema.yaml" ]; then
+  log "Bootstrapping _schema/ from defaults..."
+  mkdir -p "$KNOWLEDGE_REPO_PATH/_schema/registries"
+  cp /app/defaults/_schema/schema.yaml "$KNOWLEDGE_REPO_PATH/_schema/"
+  cp /app/defaults/_schema/registries/*.yaml "$KNOWLEDGE_REPO_PATH/_schema/registries/"
+  log "_schema/ bootstrapped"
+  if [ -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
+    git -C "$KNOWLEDGE_REPO_PATH" add "_schema/" 2>/dev/null || true
+    git -C "$KNOWLEDGE_REPO_PATH" commit -m "bootstrap: add default _schema" 2>/dev/null || true
+    git -C "$KNOWLEDGE_REPO_PATH" push 2>/dev/null || log_err "Bootstrap push failed (non-fatal)"
+    log "Bootstrap committed and pushed"
+  fi
+fi
+
 # Workspace dir
 mkdir -p "$WORKSPACE_PATH"
 
