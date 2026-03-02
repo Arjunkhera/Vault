@@ -1,0 +1,29 @@
+# ── Dependencies / build output (rebuilt in container) ────────────────────────
+node_modules
+dist
+
+# ── Git ───────────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Test artifacts ────────────────────────────────────────────────────────────
+**/*.test.ts
+**/*.spec.ts
+**/__tests__
+coverage
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+.vscode
+.idea
+*.swp
+
+# ── Local config / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+
+# ── CI / docs ─────────────────────────────────────────────────────────────────
+.github
+README.md
+TESTING.md
