@@ -21,6 +21,7 @@ import logging
 from fastapi import APIRouter, Depends
 from typing import Annotated, Any
 
+from ..config.settings import VaultSettings
 from ..layer1.interface import SearchStore
 from ..layer2.frontmatter import parse_page, to_page_summary, to_page_full
 from ..layer2.scope import resolve_scope, collect_operational_pages
@@ -35,7 +36,8 @@ from ..layer2.link_navigator import get_related_pages
 from ..layer2.schema import SchemaLoader, PageValidator, RegistryEntry
 from ..layer2.suggester import MetadataSuggester
 from ..layer2.dedup import DuplicateChecker
-from ..errors import not_found, parse_error, schema_not_loaded, internal_error, registry_not_found, duplicate_entry
+from ..layer2.git_writer import GitWriter
+from ..errors import not_found, parse_error, schema_not_loaded, internal_error, registry_not_found, duplicate_entry, validation_error
 from .models import (
     ResolveContextRequest,
     ResolveContextResponse,
@@ -61,6 +63,8 @@ from .models import (
     RegistryAddRequest,
     RegistryAddResponse,
     RegistryEntryModel,
+    WritePageRequest,
+    WritePageResponse,
 )
 
 
@@ -95,6 +99,18 @@ def get_schema_loader() -> SchemaLoader:
 
 
 SchemaLoaderDepends = Annotated[SchemaLoader, Depends(get_schema_loader)]
+
+
+def get_settings() -> VaultSettings:
+    """
+    Dependency injection for VaultSettings.
+
+    Placeholder replaced via dependency_overrides in main.py.
+    """
+    raise NotImplementedError("Settings dependency not configured")
+
+
+SettingsDepends = Annotated[VaultSettings, Depends(get_settings)]
 
 
 # ============================================================================
@@ -473,3 +489,111 @@ async def registry_add(request: RegistryAddRequest, loader: SchemaLoaderDepends)
     in-memory registry. Returns confirmation with the new total count.
     """
     return await asyncio.to_thread(_registry_add_sync, request, loader)
+
+
+def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: VaultSettings) -> WritePageResponse:
+    """Synchronous implementation of write-page."""
+    import frontmatter as fm
+    import hashlib
+    from datetime import datetime
+
+    # Validate GitHub configuration
+    if not settings.github_token:
+        raise validation_error(
+            "GitHub token not configured",
+            details={"setting": "github_token"}
+        )
+    if not settings.github_repo:
+        raise validation_error(
+            "GitHub repo not configured",
+            details={"setting": "github_repo"}
+        )
+
+    # Parse and validate frontmatter
+    try:
+        post = fm.loads(request.content)
+        metadata: dict[str, Any] = dict(post.metadata)
+    except Exception as e:
+        raise parse_error(
+            f"Failed to parse YAML frontmatter: {e}",
+            {"error_type": type(e).__name__}
+        )
+
+    # Validate against schema
+    if not loader.page_types:
+        raise schema_not_loaded("Schema has no page types loaded")
+
+    validator = PageValidator(loader)
+    result = validator.validate(metadata)
+    if not result.valid:
+        raise validation_error(
+            "Page validation failed",
+            details={
+                "errors": [
+                    {"field": e.field_name, "message": e.message}
+                    for e in result.errors
+                ]
+            }
+        )
+
+    # Derive branch, commit_message, pr_title if not provided
+    branch_name = request.path.replace("/", "-").replace(".md", "").replace("_", "-")
+    branch = f"write-page-{branch_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    commit_message = request.commit_message or f"Add/update page: {request.path}"
+    pr_title = request.pr_title or f"Add/update knowledge page: {request.path}"
+
+    # Initialize GitWriter and write page
+    writer = GitWriter(
+        repo_path=settings.knowledge_repo_path,
+        github_token=settings.github_token,
+        github_repo=settings.github_repo,
+        base_branch=settings.github_base_branch,
+    )
+
+    pr_url, commit_sha = writer.write_page(
+        page_path=request.path,
+        content=request.content,
+        branch=branch,
+        commit_message=commit_message,
+        pr_title=pr_title,
+        pr_body=request.pr_body or "",
+    )
+
+    logger.info(
+        "Page written and PR created: %s → %s",
+        request.path,
+        pr_url,
+        extra={"commit_sha": commit_sha}
+    )
+
+    return WritePageResponse(
+        pr_url=pr_url,
+        branch=branch,
+        commit_sha=commit_sha,
+        path=request.path,
+    )
+
+
+@router.post("/write-page", response_model=WritePageResponse)
+async def write_page(
+    request: WritePageRequest,
+    loader: SchemaLoaderDepends,
+    settings: SettingsDepends,
+) -> WritePageResponse:
+    """
+    Write a validated knowledge page to the knowledge-base repo, commit it to a new branch,
+    and open a GitHub PR for human review.
+
+    This completes the write-path pipeline:
+    1. Validate page content against schema + registries
+    2. Derive branch, commit, and PR metadata
+    3. Create feature branch
+    4. Write page to disk and commit
+    5. Push to GitHub
+    6. Open PR
+    7. Return PR URL (human review gate)
+
+    Requires GitHub configuration (GITHUB_TOKEN, GITHUB_REPO).
+    """
+    return await asyncio.to_thread(_write_page_sync, request, loader, settings)

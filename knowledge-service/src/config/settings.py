@@ -32,6 +32,9 @@ class VaultSettings:
     port: int = 8000
     host: str = "0.0.0.0"
     log_level: str = "info"
+    github_token: str = ""
+    github_repo: str = ""
+    github_base_branch: str = "master"
 
     def log_sources(self, sources: dict[str, str]) -> None:
         """Log which source each value came from."""
@@ -43,10 +46,17 @@ class VaultSettings:
             "port",
             "host",
             "log_level",
+            "github_repo",
+            "github_base_branch",
         ]:
             value = getattr(self, field_name)
             source = sources.get(field_name, "unknown")
             logger.info("  %s: %s (from %s)", field_name, value, source)
+
+        # Log github_token presence without exposing value
+        token_source = sources.get("github_token", "unknown")
+        token_set = bool(self.github_token)
+        logger.info("  github_token: %s (from %s)", "set" if token_set else "not set", token_source)
 
 
 def load_settings(
@@ -72,6 +82,9 @@ def load_settings(
         "port": "default",
         "host": "default",
         "log_level": "default",
+        "github_token": "default",
+        "github_repo": "default",
+        "github_base_branch": "default",
     }
 
     # Layer 1: Config file
@@ -98,6 +111,9 @@ def load_settings(
                     "port": int,
                     "host": str,
                     "log_level": str,
+                    "github_token": str,
+                    "github_repo": str,
+                    "github_base_branch": str,
                 }
                 for field_name, type_fn in field_map.items():
                     if field_name in file_config:
@@ -137,6 +153,9 @@ def load_settings(
         "VAULT_PORT": ("port", int),
         "VAULT_HOST": ("host", str),
         "VAULT_LOG_LEVEL": ("log_level", str),
+        "GITHUB_TOKEN": ("github_token", str),
+        "GITHUB_REPO": ("github_repo", str),
+        "GITHUB_BASE_BRANCH": ("github_base_branch", str),
     }
     for env_key, (field_name, type_fn) in env_map.items():
         val = os.getenv(env_key)

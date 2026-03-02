@@ -288,3 +288,24 @@ class RegistryAddResponse(BaseModel):
     registry: str
     entry: RegistryEntryModel
     total_entries: int
+
+
+# ============================================================================
+# Write-Path Operation 11: write-page
+# ============================================================================
+
+class WritePageRequest(BaseModel):
+    """Write and commit a validated knowledge page to a git branch and open PR."""
+    path: str = Field(..., description="Relative page path, e.g. 'repos/anvil.md'")
+    content: str = Field(..., description="Full markdown with YAML frontmatter")
+    commit_message: Optional[str] = Field(None, description="Git commit message; derived from path if omitted")
+    pr_title: Optional[str] = Field(None, description="PR title; derived from path if omitted")
+    pr_body: Optional[str] = Field(None, description="PR description body")
+
+
+class WritePageResponse(BaseModel):
+    """Result of writing and committing a page."""
+    pr_url: str = Field(..., description="GitHub PR URL")
+    branch: str = Field(..., description="Branch name created")
+    commit_sha: str = Field(..., description="SHA of the commit")
+    path: str = Field(..., description="Relative file path written")
