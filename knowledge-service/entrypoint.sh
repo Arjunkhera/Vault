@@ -10,6 +10,8 @@ LOG_LEVEL=${LOG_LEVEL:-info}
 VAULT_KNOWLEDGE_REPO_URL=${VAULT_KNOWLEDGE_REPO_URL:-}
 VAULT_SYNC_INTERVAL=${VAULT_SYNC_INTERVAL:-300}
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
+GITHUB_REPO=${GITHUB_REPO:-}
+GITHUB_BASE_BRANCH=${GITHUB_BASE_BRANCH:-master}
 PULL_PID=""
 PYTHON_PID=""
 
@@ -66,6 +68,13 @@ if [ -n "$VAULT_KNOWLEDGE_REPO_URL" ] && [ ! -d "$KNOWLEDGE_REPO_PATH/.git" ]; t
   log "Knowledge repo cloned successfully"
 fi
 
+# Derive GITHUB_REPO from VAULT_KNOWLEDGE_REPO_URL if not already set
+# Converts https://github.com/owner/repo.git → owner/repo
+if [ -z "$GITHUB_REPO" ] && [ -n "$VAULT_KNOWLEDGE_REPO_URL" ]; then
+  GITHUB_REPO=$(echo "$VAULT_KNOWLEDGE_REPO_URL" | sed -E 's|.*/([^/]+)/([^/]+?)(.git)?$|\1/\2|')
+  log "Derived GITHUB_REPO from URL: $GITHUB_REPO"
+fi
+
 # Configure git credentials and identity for any push operations
 if [ -n "$GITHUB_TOKEN" ] && [ -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
   git -C "$KNOWLEDGE_REPO_PATH" config credential.helper "store"
@@ -111,6 +120,9 @@ fi
 # Start uvicorn as background + wait
 log "Starting Vault knowledge service on ${HOST}:${PORT}..."
 cd /app
+GITHUB_REPO="$GITHUB_REPO" \
+GITHUB_BASE_BRANCH="$GITHUB_BASE_BRANCH" \
+GITHUB_TOKEN="$GITHUB_TOKEN" \
 python -m uvicorn src.main:app \
   --host "$HOST" \
   --port "$PORT" \
