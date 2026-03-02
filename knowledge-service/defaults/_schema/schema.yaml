@@ -1,0 +1,114 @@
+version: 1
+
+page_types:
+  - id: repo-profile
+    description: Repository profile page documenting a software repository
+    required_scope_fields:
+      - repo
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - owner
+      - last-verified
+      - related
+    allowed_modes:
+      - reference
+
+  - id: guide
+    description: Comprehensive guide or tutorial for a topic or tool
+    required_scope_fields: []
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - owner
+      - last-verified
+      - related
+      - scope
+    allowed_modes:
+      - reference
+      - operational
+
+  - id: concept
+    description: Conceptual documentation explaining a key idea or principle
+    required_scope_fields: []
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - owner
+      - last-verified
+      - related
+      - scope
+    allowed_modes:
+      - reference
+
+  - id: procedure
+    description: Step-by-step procedure for performing a task
+    required_scope_fields: []
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - owner
+      - last-verified
+      - related
+      - scope
+    allowed_modes:
+      - reference
+      - operational
+
+  - id: keystone
+    description: Foundational keystone document for the knowledge base
+    required_scope_fields: []
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - related
+      - scope
+    allowed_modes:
+      - keystone
+
+  - id: learning
+    description: Learning resource or educational material
+    required_scope_fields: []
+    required_fields:
+      - title
+      - description
+      - type
+      - mode
+    recommended_fields:
+      - tags
+      - owner
+      - last-verified
+      - related
+      - scope
+    allowed_modes:
+      - reference
+
+field_constraints:
+  - field: title
+    max_length: 120
+  - field: description
+    max_length: 300
+  - field: tags
+    min_items: 1
+  - field: scope
+    min_fields: 1
