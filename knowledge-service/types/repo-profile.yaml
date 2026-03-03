@@ -3,7 +3,17 @@ name: Repository Profile
 description: "Entry point for a repository — tech stack, key modules, how to build/test, dependencies"
 required_scope:
   - repo
-fields: {}
+fields:
+  hosting:
+    required: false
+    description: "Git hosting configuration (hostname and org/owner)"
+  workflow:
+    required: false
+    description: "Git workflow configuration"
+  workflow.strategy:
+    required: false
+    description: "How code changes are pushed and PR'd"
+    values: [owner, fork, direct]
 template: |
   ---
   type: repo-profile
@@ -17,6 +27,14 @@ template: |
   mode: reference
   owner: ""
   last-verified: ""
+  hosting:
+    hostname: ""
+    org: ""
+  workflow:
+    strategy: ""
+    default-branch: main
+    pr-target: main
+    branch-convention: ""
   ---
 
   # Repository Name
@@ -30,3 +48,5 @@ template: |
   ## Build & Test
 
   ## Dependencies
+
+  ## Git Workflow

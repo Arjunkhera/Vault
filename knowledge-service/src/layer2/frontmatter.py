@@ -41,6 +41,10 @@ class ParsedPage:
     owner: Optional[str] = None
     last_verified: Optional[str] = None
 
+    # Git hosting and workflow (repo-profile specific)
+    hosting: dict = field(default_factory=dict)
+    workflow: dict = field(default_factory=dict)
+
     # Content
     body: str = ""
 
@@ -95,6 +99,8 @@ def parse_page(content: str) -> ParsedPage:
         applies_to=metadata.get("applies-to", []),
         owner=metadata.get("owner"),
         last_verified=metadata.get("last-verified"),
+        hosting=metadata.get("hosting", {}),
+        workflow=metadata.get("workflow", {}),
         body=post.content  # Body content without frontmatter
     )
 

@@ -7,6 +7,7 @@ from tests.conftest import (
     CONCEPT_PAGE,
     INVALID_PAGE,
     CODING_STANDARDS_PROCEDURE,
+    REPO_PROFILE_WITH_WORKFLOW,
 )
 
 
@@ -65,6 +66,63 @@ mode: nonexistent
         result = validate_page(page, type_registry)
         has_mode_error = any(e.field == "mode" for e in result.errors)
         assert has_mode_error
+
+    def test_valid_repo_profile_with_workflow(self, type_registry):
+        """repo-profile with valid hosting and workflow fields should pass."""
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        result = validate_page(page, type_registry)
+        assert result.valid is True
+        assert result.errors == []
+
+    def test_invalid_workflow_strategy(self, type_registry):
+        """workflow.strategy with invalid value should produce error."""
+        content = """---
+type: repo-profile
+title: Bad Strategy
+description: This repo profile has an invalid workflow strategy
+scope:
+  repo: bad-strategy
+mode: reference
+tags: [core]
+workflow:
+  strategy: invalid-strategy
+  default-branch: main
+---
+# Bad Strategy
+"""
+        page = parse_page(content)
+        result = validate_page(page, type_registry)
+        assert result.valid is False
+        has_strategy_error = any("workflow.strategy" in e.field for e in result.errors)
+        assert has_strategy_error
+
+    def test_valid_workflow_strategies(self, type_registry):
+        """All valid workflow strategies should pass validation."""
+        for strategy in ["owner", "fork", "direct"]:
+            content = f"""---
+type: repo-profile
+title: Strategy Test
+description: Testing workflow strategy {strategy}
+scope:
+  repo: strategy-test
+mode: reference
+tags: [core]
+workflow:
+  strategy: {strategy}
+  default-branch: main
+---
+# Strategy Test
+"""
+            page = parse_page(content)
+            result = validate_page(page, type_registry)
+            strategy_errors = [e for e in result.errors if "workflow.strategy" in e.field]
+            assert strategy_errors == [], f"Strategy '{strategy}' should be valid but got errors: {strategy_errors}"
+
+    def test_missing_workflow_fields_are_optional(self, type_registry):
+        """hosting and workflow fields are optional — omitting them should pass."""
+        page = parse_page(ANVIL_REPO_PROFILE)
+        result = validate_page(page, type_registry)
+        assert result.valid is True
 
     def test_repo_profile_missing_repo_scope(self, type_registry):
         """repo-profile requires scope.repo — missing should produce error."""

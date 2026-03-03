@@ -153,7 +153,7 @@ def _validate_field_constraints(
 
 def _extract_field_values(page: ParsedPage) -> dict:
     """Extract a flat dict of field name → value from a ParsedPage."""
-    return {
+    values = {
         "title": page.title,
         "description": page.description,
         "type": page.type,
@@ -166,4 +166,10 @@ def _extract_field_values(page: ParsedPage) -> dict:
         "depends-on": page.depends_on if page.depends_on else None,
         "consumed-by": page.consumed_by if page.consumed_by else None,
         "applies-to": page.applies_to if page.applies_to else None,
+        "hosting": page.hosting if page.hosting else None,
+        "workflow": page.workflow if page.workflow else None,
     }
+    # Flatten nested workflow fields for per-field constraint validation
+    if page.workflow:
+        values["workflow.strategy"] = page.workflow.get("strategy")
+    return values

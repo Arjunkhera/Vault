@@ -61,6 +61,37 @@ class ScopeSuggestions:
 
 
 @dataclass
+class HostingSuggestions:
+    """Nested suggestions for the hosting object."""
+    hostname: Optional[FieldSuggestion] = None
+    org: Optional[FieldSuggestion] = None
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        for name in ("hostname", "org"):
+            val = getattr(self, name)
+            if val is not None:
+                d[name] = val.to_dict()
+        return d
+
+
+@dataclass
+class WorkflowSuggestions:
+    """Nested suggestions for the workflow object."""
+    strategy: Optional[FieldSuggestion] = None
+    default_branch: Optional[FieldSuggestion] = None
+    pr_target: Optional[FieldSuggestion] = None
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        for attr, key in (("strategy", "strategy"), ("default_branch", "default-branch"), ("pr_target", "pr-target")):
+            val = getattr(self, attr)
+            if val is not None:
+                d[key] = val.to_dict()
+        return d
+
+
+@dataclass
 class SuggestionResult:
     """Aggregate suggestions for all frontmatter fields."""
     kb_status: str = "populated"  # "populated" | "sparse" | "empty"
@@ -69,10 +100,7 @@ class SuggestionResult:
     def to_dict(self) -> dict:
         out: dict = {"kb_status": self.kb_status, "suggestions": {}}
         for key, val in self.suggestions.items():
-            if isinstance(val, ScopeSuggestions):
-                out["suggestions"][key] = val.to_dict()
-            else:
-                out["suggestions"][key] = val.to_dict()
+            out["suggestions"][key] = val.to_dict()
         return out
 
 
@@ -197,6 +225,58 @@ def _extract_repo_mentions(body: str) -> list[str]:
     return list(dict.fromkeys(repos))  # dedupe, preserve order
 
 
+def _extract_github_hosting(body: str) -> list[tuple[str, str]]:
+    """
+    Extract (hostname, org) pairs from GitHub URLs in body text.
+
+    Handles both github.com and enterprise GitHub hostnames.
+    Returns list of (hostname, org) tuples, deduplicated, in order of appearance.
+    """
+    results: list[tuple[str, str]] = []
+    # Matches: github.com/org/repo, github.corp.acme.com/org/repo, git@github.com:org/repo
+    for m in re.finditer(
+        r"(?:https?://|git@)(github(?:\.[a-z0-9-]+)*\.(?:com|io|org))[/:]+([\w-]+)/[\w.-]+",
+        body,
+        re.IGNORECASE,
+    ):
+        hostname = m.group(1).lower()
+        org = m.group(2)
+        pair = (hostname, org)
+        if pair not in results:
+            results.append(pair)
+    return results
+
+
+_FORK_SIGNALS = [
+    "upstream", "fork", "forked from", "pr against upstream",
+    "pull request against", "origin is my fork",
+]
+
+_DIRECT_SIGNALS = [
+    "no forks", "forks not allowed", "push directly", "shared repo",
+    "push to origin", "feature branch",
+]
+
+
+def _detect_workflow_strategy(body: str) -> tuple[Optional[str], str]:
+    """
+    Infer git workflow strategy from body text signals.
+
+    Returns (strategy_or_None, reason).
+    """
+    lower = body.lower()
+
+    fork_hits = sum(1 for s in _FORK_SIGNALS if s in lower)
+    direct_hits = sum(1 for s in _DIRECT_SIGNALS if s in lower)
+
+    if fork_hits > 0 and fork_hits >= direct_hits:
+        return "fork", f"Content contains {fork_hits} fork workflow signal(s)"
+    if direct_hits > 0:
+        return "direct", f"Content contains {direct_hits} direct push signal(s)"
+
+    return None, "No workflow strategy signals found in content"
+
+
 # ---------------------------------------------------------------------------
 # KB status detection
 # ---------------------------------------------------------------------------
@@ -291,6 +371,11 @@ class MetadataSuggester:
                 confidence="low",
                 reason=f"Automatic {dep_field} detection not yet implemented",
             )
+
+        # --- hosting and workflow (repo-profile only) ---
+        if type_val_str == "repo-profile":
+            result.suggestions["hosting"] = self._suggest_hosting(body, hints)
+            result.suggestions["workflow"] = self._suggest_workflow(body, hints)
 
         return result
 
@@ -485,6 +570,90 @@ class MetadataSuggester:
             reason += " (KB is sparse — limited matches)"
 
         return FieldSuggestion(value=related, confidence=conf, reason=reason)
+
+    def _suggest_hosting(self, body: str, hints: dict) -> HostingSuggestions:
+        hosting = HostingSuggestions()
+
+        if hints.get("hosting.hostname"):
+            hosting.hostname = FieldSuggestion(
+                value=hints["hosting.hostname"], confidence="high", reason="From hint"
+            )
+        if hints.get("hosting.org"):
+            hosting.org = FieldSuggestion(
+                value=hints["hosting.org"], confidence="high", reason="From hint"
+            )
+
+        if hosting.hostname is None or hosting.org is None:
+            pairs = _extract_github_hosting(body)
+            if pairs:
+                hostname, org = pairs[0]
+                alts = [{"value": f"{h}/{o}", "reason": "Also found in content"} for h, o in pairs[1:3]]
+                if hosting.hostname is None:
+                    hosting.hostname = FieldSuggestion(
+                        value=hostname,
+                        confidence="medium",
+                        reason="Extracted from GitHub URL in content",
+                        alternatives=alts,
+                    )
+                if hosting.org is None:
+                    hosting.org = FieldSuggestion(
+                        value=org,
+                        confidence="medium",
+                        reason="Extracted from GitHub URL in content",
+                        alternatives=alts,
+                    )
+
+        if hosting.hostname is None:
+            hosting.hostname = FieldSuggestion(
+                value=None, confidence="none", reason="No GitHub URL found in content"
+            )
+        if hosting.org is None:
+            hosting.org = FieldSuggestion(
+                value=None, confidence="none", reason="No GitHub URL found in content"
+            )
+
+        return hosting
+
+    def _suggest_workflow(self, body: str, hints: dict) -> WorkflowSuggestions:
+        workflow = WorkflowSuggestions()
+
+        if hints.get("workflow.strategy"):
+            workflow.strategy = FieldSuggestion(
+                value=hints["workflow.strategy"], confidence="high", reason="From hint"
+            )
+        else:
+            strategy, reason = _detect_workflow_strategy(body)
+            workflow.strategy = FieldSuggestion(
+                value=strategy,
+                confidence="medium" if strategy else "none",
+                reason=reason,
+            )
+
+        # Default branch: almost always main, but check for master signals
+        if hints.get("workflow.default-branch"):
+            workflow.default_branch = FieldSuggestion(
+                value=hints["workflow.default-branch"], confidence="high", reason="From hint"
+            )
+        elif "master" in body.lower() and "main" not in body.lower():
+            workflow.default_branch = FieldSuggestion(
+                value="master", confidence="low",
+                reason="Content mentions 'master' but not 'main' — verify this is correct"
+            )
+        else:
+            workflow.default_branch = FieldSuggestion(
+                value="main", confidence="medium",
+                reason="Default branch is 'main' for most modern repositories"
+            )
+
+        # PR target: same as default branch in most cases
+        pr_target = workflow.default_branch.value if workflow.default_branch else "main"
+        workflow.pr_target = FieldSuggestion(
+            value=pr_target,
+            confidence="low",
+            reason="PR target typically matches default branch — verify for fork workflows",
+        )
+
+        return workflow
 
     def _suggest_owner(self, body: str, kb_status: str, hints: dict) -> FieldSuggestion:
         if hints.get("owner"):
