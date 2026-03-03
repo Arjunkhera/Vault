@@ -1,7 +1,7 @@
 """Tests for the frontmatter parser."""
 
 from src.layer2.frontmatter import parse_page, to_page_summary, to_page_full, ParsedPage
-from tests.conftest import ANVIL_REPO_PROFILE, CONCEPT_PAGE, CODING_STANDARDS_PROCEDURE
+from tests.conftest import ANVIL_REPO_PROFILE, CONCEPT_PAGE, CODING_STANDARDS_PROCEDURE, REPO_PROFILE_WITH_WORKFLOW
 
 
 class TestParsePage:
@@ -87,6 +87,50 @@ title: Minimal
         """ParsedPage should not have source field."""
         page = parse_page(ANVIL_REPO_PROFILE)
         assert not hasattr(page, "source")
+
+
+class TestHostingAndWorkflowFields:
+    def test_parses_hosting_hostname(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.hosting["hostname"] == "github.com"
+
+    def test_parses_hosting_org(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.hosting["org"] == "Arjunkhera"
+
+    def test_parses_workflow_strategy(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.workflow["strategy"] == "owner"
+
+    def test_parses_workflow_default_branch(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.workflow["default-branch"] == "main"
+
+    def test_parses_workflow_pr_target(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.workflow["pr-target"] == "main"
+
+    def test_parses_workflow_branch_convention(self):
+        page = parse_page(REPO_PROFILE_WITH_WORKFLOW)
+        assert page.workflow["branch-convention"] == "feat/*"
+
+    def test_hosting_defaults_to_empty_dict(self):
+        page = parse_page(ANVIL_REPO_PROFILE)
+        assert page.hosting == {}
+
+    def test_workflow_defaults_to_empty_dict(self):
+        page = parse_page(ANVIL_REPO_PROFILE)
+        assert page.workflow == {}
+
+    def test_minimal_page_hosting_defaults(self):
+        minimal = """---
+title: Minimal
+---
+# Minimal
+"""
+        page = parse_page(minimal)
+        assert page.hosting == {}
+        assert page.workflow == {}
 
 
 class TestToPageSummary:

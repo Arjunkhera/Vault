@@ -137,6 +137,40 @@ related:
 The Anvil-Forge-Vault system consists of three interconnected services...
 """
 
+REPO_PROFILE_WITH_WORKFLOW = """---
+type: repo-profile
+title: Horus
+description: Developer workspace orchestration platform for multi-repo engineering workflows
+scope:
+  program: anvil-forge-vault
+  repo: horus
+mode: reference
+tags: [core, backend, typescript]
+owner: arjun
+last-verified: "2026-03-03"
+related:
+  - "[[Anvil]]"
+  - "[[Forge]]"
+hosting:
+  hostname: github.com
+  org: Arjunkhera
+workflow:
+  strategy: owner
+  default-branch: main
+  pr-target: main
+  branch-convention: "feat/*"
+---
+# Horus
+
+Horus is the developer workspace orchestration platform.
+
+## Git Workflow
+
+- **Strategy**: Owner — push directly to origin, PR on same repo
+- **Default branch**: `main`
+- **Branch naming**: `feat/`, `fix/`, `chore/` prefixes
+"""
+
 # Page missing required field (no description) — for validation testing
 INVALID_PAGE = """---
 type: repo-profile
