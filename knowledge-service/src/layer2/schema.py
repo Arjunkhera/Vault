@@ -442,6 +442,30 @@ class PageValidator:
                 action_required="fix_format",
             ))
 
+        # generic allowed_values — handles dot-notation fields (e.g. workflow.strategy)
+        for field_name, constraint in constraints.items():
+            allowed = constraint.get("allowed_values")
+            if not allowed:
+                continue
+            # Resolve dot-notation path into the metadata dict
+            parts = field_name.split(".")
+            val: Any = metadata
+            for part in parts:
+                if not isinstance(val, dict):
+                    val = None
+                    break
+                val = val.get(part)
+            if val is None:
+                continue  # field absent — optional, skip
+            if isinstance(val, str) and val not in allowed:
+                errors.append(ValidationError(
+                    field_name=field_name,
+                    value=val,
+                    message=f"Invalid value '{val}' for '{field_name}' (allowed: {', '.join(allowed)})",
+                    suggestions=list(allowed),
+                    action_required="pick_or_add",
+                ))
+
         # -- 4. registry-backed checks ---------------------------------------
         self._check_registry_list(metadata, "tags", "tags", errors, warnings)
         if isinstance(scope, dict):
