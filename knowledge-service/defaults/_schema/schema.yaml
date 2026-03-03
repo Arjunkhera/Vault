@@ -112,3 +112,5 @@ field_constraints:
     min_items: 1
   - field: scope
     min_fields: 1
+  - field: workflow.strategy
+    allowed_values: [owner, fork, direct]
