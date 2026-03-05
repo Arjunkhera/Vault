@@ -1,20 +1,34 @@
 """
 QMD adapter implementation of the SearchStore interface.
 
-Wraps the QMD CLI tool via subprocess calls. QMD is a TypeScript/Bun tool
-with no Python library, so subprocess integration is the only option.
+Supports two modes selected by the QMD_DAEMON_URL environment variable:
 
-All QMD commands use --index {index_name} to isolate the Knowledge Service
-index from the user's personal QMD index.
+  HTTP daemon mode (QMD_DAEMON_URL set):
+    Search calls (search, semantic_search, hybrid_search) are routed to the
+    shared QMD MCP HTTP daemon via JSON-RPC 2.0. Models stay warm in memory
+    across requests; no subprocess spawned per search.
+
+  Subprocess mode (QMD_DAEMON_URL not set):
+    Original behaviour — wraps the QMD CLI via subprocess for every call.
+    All QMD commands use --index {index_name} to isolate the Knowledge Service
+    index from the user's personal QMD index.
+
+Collection management (ensure_collections, reindex) always uses subprocess so
+that Vault writes to the shared SQLite database the daemon reads from. In daemon
+mode the subprocess calls omit --index so they operate on the same default
+database the daemon uses.
 """
 
 import json
 import logging
+import threading
 from typing import Any
 import os
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+import httpx
 
 from .interface import SearchStore, SearchResult, Document
 from ..errors import VaultError, ErrorCode
@@ -23,11 +37,105 @@ from ..errors import VaultError, ErrorCode
 logger = logging.getLogger(__name__)
 
 
+# ── MCP session helper ────────────────────────────────────────────────────────
+
+class _QMDMcpSession:
+    """
+    Lightweight MCP session manager for the QMD HTTP daemon.
+
+    Handles initialize handshake + tools/call over JSON-RPC 2.0 (POST /mcp).
+    Thread-safe: a single lock serialises session initialisation.
+    """
+
+    def __init__(self, daemon_url: str) -> None:
+        self._url = daemon_url.rstrip("/") + "/mcp"
+        self._session_id: Optional[str] = None
+        self._request_id = 0
+        self._lock = threading.Lock()
+
+    def _next_id(self) -> int:
+        self._request_id += 1
+        return self._request_id
+
+    def _ensure_session(self) -> None:
+        """Send MCP initialize if no session is active."""
+        if self._session_id:
+            return
+
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "vault-qmd-client", "version": "1.0"},
+            },
+        }
+        resp = httpx.post(self._url, json=body, timeout=10.0)
+        resp.raise_for_status()
+        self._session_id = resp.headers.get("mcp-session-id")
+
+        # Fire-and-forget initialized notification (required by MCP protocol)
+        try:
+            headers: dict[str, str] = {}
+            if self._session_id:
+                headers["Mcp-Session-Id"] = self._session_id
+            httpx.post(
+                self._url,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                headers=headers,
+                timeout=5.0,
+            )
+        except Exception:
+            pass
+
+    def _do_call(self, name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+        headers: dict[str, str] = {"Accept": "application/json"}
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "tools/call",
+            "params": {"name": name, "arguments": args},
+        }
+        resp = httpx.post(self._url, json=body, headers=headers, timeout=60.0)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if "error" in data:
+            msg = data["error"].get("message", "unknown")
+            raise RuntimeError(f"QMD RPC error: {msg}")
+
+        result = data.get("result", {})
+        if result.get("isError"):
+            raise RuntimeError(f"QMD tool '{name}' returned an error")
+
+        return result.get("structuredContent", {}).get("results", [])
+
+    def call_tool(self, name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+        """Call a QMD MCP tool. Re-initialises the session on failure."""
+        with self._lock:
+            try:
+                self._ensure_session()
+                return self._do_call(name, args)
+            except Exception:
+                # Session may have been invalidated (daemon restart). Retry once.
+                self._session_id = None
+                self._ensure_session()
+                return self._do_call(name, args)
+
+
+# ── QMDAdapter ────────────────────────────────────────────────────────────────
+
 class QMDAdapter(SearchStore):
     """
-    SearchStore implementation using QMD CLI via subprocess.
+    SearchStore implementation using QMD.
 
-    QMD is invoked as: qmd --index {index_name} <command> [args]
+    Subprocess mode: qmd --index {index_name} <command> [args]
+    HTTP daemon mode: POST {QMD_DAEMON_URL}/mcp with tools/call JSON-RPC
 
     Config location: ~/.config/qmd/{index_name}.yml
     Database location: ~/.cache/qmd/{index_name}.sqlite
@@ -40,14 +148,23 @@ class QMDAdapter(SearchStore):
         self.index_name = index_name
         self._collection_paths = {}
 
+        daemon_url = os.environ.get("QMD_DAEMON_URL")
+        self._mcp: Optional[_QMDMcpSession] = _QMDMcpSession(daemon_url) if daemon_url else None
+
+    # ── subprocess helpers ────────────────────────────────────────────────────
+
     def _run_qmd(self, args: list[str], check: bool = True) -> str:
         """
         Run a QMD CLI command and return stdout.
 
-        Raises:
-            VaultError: If command fails and check=True
+        In daemon mode the --index flag is omitted so subprocess calls operate
+        on the same default database the daemon uses (shared via qmd-daemon-data
+        volume). In subprocess-only mode --index {index_name} is included.
         """
-        cmd = ["qmd", "--index", self.index_name] + args
+        if self._mcp:
+            cmd = ["qmd"] + args
+        else:
+            cmd = ["qmd", "--index", self.index_name] + args
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=check
@@ -64,8 +181,10 @@ class QMDAdapter(SearchStore):
                 details={"command": " ".join(cmd), "stderr": e.stderr}
             ) from e
 
+    # ── result parsing ────────────────────────────────────────────────────────
+
     def _parse_search_results(self, output: str, collection: Optional[str]) -> list[SearchResult]:
-        """Parse QMD JSON search output into SearchResult objects."""
+        """Parse QMD JSON subprocess output into SearchResult objects."""
         try:
             results_data = json.loads(output)
         except json.JSONDecodeError as e:
@@ -82,40 +201,89 @@ class QMDAdapter(SearchStore):
             ))
         return results
 
-    def search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """Perform BM25 keyword search using 'qmd search'."""
-        args = ["search", query, "--json", "-n", str(limit)]
-        if collection:
-            args.extend(["-c", collection])
+    def _parse_mcp_results(self, raw: list[dict[str, Any]], collection: Optional[str]) -> list[SearchResult]:
+        """Parse QMD MCP tool results into SearchResult objects."""
+        results = []
+        for item in raw:
+            file_path = item.get("file", "")
+            # file is displayPath format: "{collection}/{relative}" — extract collection
+            coll = collection or ""
+            if "/" in file_path and not coll:
+                coll = file_path.split("/", 1)[0]
+            results.append(SearchResult(
+                file_path=file_path,
+                score=item.get("score", 0.0),
+                snippet=item.get("snippet", ""),
+                collection=coll,
+            ))
+        return results
 
+    # ── SearchStore interface ─────────────────────────────────────────────────
+
+    def search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
+        """Perform BM25 keyword search."""
+        if self._mcp:
+            try:
+                args: dict[str, Any] = {"query": query, "limit": limit}
+                if collection:
+                    args["collection"] = collection
+                raw = self._mcp.call_tool("search", args)
+                return self._parse_mcp_results(raw, collection)
+            except Exception:
+                logger.warning("HTTP BM25 search failed for query: %s", query)
+                return []
+
+        args_list = ["search", query, "--json", "-n", str(limit)]
+        if collection:
+            args_list.extend(["-c", collection])
         try:
-            output = self._run_qmd(args)
+            output = self._run_qmd(args_list)
             return self._parse_search_results(output, collection)
         except VaultError:
             logger.warning("BM25 search failed for query: %s", query)
             return []
 
     def semantic_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """Perform semantic vector search using 'qmd vsearch'."""
-        args = ["vsearch", query, "--json", "-n", str(limit)]
-        if collection:
-            args.extend(["-c", collection])
+        """Perform semantic vector search."""
+        if self._mcp:
+            try:
+                args: dict[str, Any] = {"query": query, "limit": limit}
+                if collection:
+                    args["collection"] = collection
+                raw = self._mcp.call_tool("vector_search", args)
+                return self._parse_mcp_results(raw, collection)
+            except Exception:
+                logger.warning("HTTP semantic search failed for query: %s", query)
+                return []
 
+        args_list = ["vsearch", query, "--json", "-n", str(limit)]
+        if collection:
+            args_list.extend(["-c", collection])
         try:
-            output = self._run_qmd(args)
+            output = self._run_qmd(args_list)
             return self._parse_search_results(output, collection)
         except VaultError:
             logger.warning("Semantic search failed for query: %s", query)
             return []
 
     def hybrid_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
-        """Perform hybrid search (BM25 + vector + reranking) using 'qmd query'."""
-        args = ["query", query, "--json", "-n", str(limit)]
-        if collection:
-            args.extend(["-c", collection])
+        """Perform hybrid search (BM25 + vector + reranking)."""
+        if self._mcp:
+            try:
+                args: dict[str, Any] = {"query": query, "limit": limit}
+                if collection:
+                    args["collection"] = collection
+                raw = self._mcp.call_tool("deep_search", args)
+                return self._parse_mcp_results(raw, collection)
+            except Exception:
+                logger.warning("HTTP hybrid search failed for query: %s", query)
+                return []
 
+        args_list = ["query", query, "--json", "-n", str(limit)]
+        if collection:
+            args_list.extend(["-c", collection])
         try:
-            output = self._run_qmd(args)
+            output = self._run_qmd(args_list)
             return self._parse_search_results(output, collection)
         except VaultError:
             logger.warning("Hybrid search failed for query: %s", query)
@@ -212,12 +380,23 @@ class QMDAdapter(SearchStore):
         return cache
 
     def reindex(self) -> None:
-        """Trigger full re-index: update + embed."""
+        """
+        Trigger re-index of Vault's collections (shared + workspace).
+
+        Always uses subprocess. In daemon mode the subprocess operates on the
+        shared SQLite database so the daemon picks up new documents automatically.
+        Uses per-collection update to avoid touching the 'anvil' collection
+        (Anvil is responsible for its own collection).
+        """
+        for coll in ["shared", "workspace"]:
+            try:
+                self._run_qmd(["update", "-c", coll])
+            except VaultError as e:
+                logger.error("Re-index failed for collection '%s': %s", coll, e.message)
         try:
-            self._run_qmd(["update"])
             self._run_qmd(["embed"])
         except VaultError as e:
-            logger.error("Re-index failed: %s", e.message)
+            logger.error("Embed failed: %s", e.message)
             raise
 
     def status(self) -> dict[str, Any]:  # type: ignore[type-arg]
@@ -248,6 +427,7 @@ class QMDAdapter(SearchStore):
         - "workspace" collection: user's workspace (mounted from host)
 
         Idempotent — safe to call multiple times.
+        In daemon mode the subprocess operates on the shared database (no --index flag).
         """
         self._collection_paths = {
             "shared": shared_path,
