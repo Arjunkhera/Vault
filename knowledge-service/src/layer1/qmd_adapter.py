@@ -72,7 +72,11 @@ class _QMDMcpSession:
                 "clientInfo": {"name": "vault-qmd-client", "version": "1.0"},
             },
         }
-        resp = httpx.post(self._url, json=body, timeout=10.0)
+        resp = httpx.post(
+            self._url, json=body,
+            headers={"Accept": "application/json, text/event-stream"},
+            timeout=10.0,
+        )
         resp.raise_for_status()
         self._session_id = resp.headers.get("mcp-session-id")
 
@@ -91,7 +95,7 @@ class _QMDMcpSession:
             pass
 
     def _do_call(self, name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
-        headers: dict[str, str] = {"Accept": "application/json"}
+        headers: dict[str, str] = {"Accept": "application/json, text/event-stream"}
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
 
