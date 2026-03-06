@@ -547,12 +547,19 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
             }
         )
 
+    # Strip collection prefix if caller passed the ID format (e.g. "shared/repos/foo.md")
+    path = request.path
+    for _prefix in ("shared/", "workspace/"):
+        if path.startswith(_prefix):
+            path = path[len(_prefix):]
+            break
+
     # Derive branch, commit_message, pr_title if not provided
-    branch_name = request.path.replace("/", "-").replace(".md", "").replace("_", "-")
+    branch_name = path.replace("/", "-").replace(".md", "").replace("_", "-")
     branch = f"write-page-{branch_name}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-    commit_message = request.commit_message or f"Add/update page: {request.path}"
-    pr_title = request.pr_title or f"Add/update knowledge page: {request.path}"
+    commit_message = request.commit_message or f"Add/update page: {path}"
+    pr_title = request.pr_title or f"Add/update knowledge page: {path}"
 
     # Initialize GitWriter and write page
     writer = GitWriter(
@@ -563,7 +570,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
     )
 
     pr_url, commit_sha = writer.write_page(
-        page_path=request.path,
+        page_path=path,
         content=request.content,
         branch=branch,
         commit_message=commit_message,
@@ -582,7 +589,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
         pr_url=pr_url,
         branch=branch,
         commit_sha=commit_sha,
-        path=request.path,
+        path=path,
     )
 
 
