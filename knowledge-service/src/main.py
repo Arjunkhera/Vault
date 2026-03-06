@@ -21,8 +21,12 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+import os
+
 from .config.settings import load_settings
 from .layer1.qmd_adapter import QMDAdapter
+from .layer1.fts_engine import FtsSearchEngine
+from .layer1.fallback_store import FallbackSearchStore
 from .layer2.schema import SchemaLoader
 from .api.routes import router, get_store, get_schema_loader, get_settings
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
@@ -57,14 +61,26 @@ async def lifespan(app: FastAPI):
     logger.info("Vault configuration resolved:")
     settings.log_sources(sources)
 
-    # Initialize QMD adapter
+    # Initialize QMD adapter (primary search engine)
     logger.info("Initializing QMD adapter...")
-    adapter = QMDAdapter(index_name=settings.qmd_index_name)
+    qmd_adapter = QMDAdapter(index_name=settings.qmd_index_name)
+
+    # Initialize FTS5 fallback engine
+    fts_engine = FtsSearchEngine(
+        db_path=os.path.join(settings.workspace_path, ".vault", "fts5_index.db"),
+        collection_paths={
+            "shared": settings.knowledge_repo_path,
+            "workspace": settings.workspace_path,
+        },
+    )
+
+    # Wrap both in a fallback store
+    store = FallbackSearchStore(qmd_adapter, fts_engine)
 
     # Setup collections (idempotent)
     logger.info("Setting up QMD collections...")
     try:
-        adapter.ensure_collections(
+        store.ensure_collections(
             shared_path=settings.knowledge_repo_path,
             workspace_path=settings.workspace_path
         )
@@ -73,8 +89,16 @@ async def lifespan(app: FastAPI):
         logger.error("Failed to setup collections: %s", e)
         raise
 
-    # Store adapter in app state for dependency injection
-    app.state.store = adapter
+    # Build initial FTS5 index so fallback is ready immediately
+    logger.info("Building FTS5 fallback index...")
+    try:
+        fts_engine.reindex()
+        logger.info("FTS5 fallback index ready")
+    except Exception as e:
+        logger.warning("FTS5 index build failed (non-fatal): %s", e)
+
+    # Store fallback store in app state for dependency injection
+    app.state.store = store
 
     # Store settings in app state for dependency injection (write-path operations)
     app.state.settings = settings
@@ -95,7 +119,7 @@ async def lifespan(app: FastAPI):
     # Start sync daemon (git pull loop + workspace watcher)
     logger.info("Starting sync daemon...")
     git_pull_task, workspace_observer = await start_sync_daemon(
-        store=adapter,
+        store=store,
         knowledge_repo_path=settings.knowledge_repo_path,
         workspace_path=settings.workspace_path,
         sync_interval=settings.sync_interval,
