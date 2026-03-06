@@ -175,6 +175,17 @@ def _search_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
     search_results = store.search(request.query, limit=request.limit * 2)
     doc_cache = store.get_all_documents()
 
+    # If both search and doc_cache returned nothing, this is likely a system
+    # error (e.g. QMD down AND FTS5 index empty) rather than "no results".
+    if not search_results and not doc_cache:
+        logger.error(
+            "Search returned zero results AND doc_cache is empty for query '%s'. "
+            "Both QMD and FTS5 fallback may be non-functional. "
+            "Store status: %s",
+            request.query,
+            store.status() if hasattr(store, "status") else "unknown",
+        )
+
     pages_with_scores: list[tuple[Any, str, float]] = []
 
     for result in search_results:
