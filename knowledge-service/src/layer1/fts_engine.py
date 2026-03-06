@@ -52,7 +52,7 @@ class FtsSearchEngine(SearchStore):
         return self._conn
 
     def _sanitize_query(self, query: str) -> str:
-        cleaned = re.sub(r'[()":^~{}]', '', query).strip()
+        cleaned = re.sub(r'[()":^~{}#:]', '', query).strip()
         if not cleaned:
             return '*'
         words = cleaned.split()
