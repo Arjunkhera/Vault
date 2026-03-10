@@ -15,6 +15,9 @@ GITHUB_BASE_BRANCH=${GITHUB_BASE_BRANCH:-master}
 PULL_PID=""
 PYTHON_PID=""
 
+# Mark bind-mounted path as safe for git (CVE-2022-24765: ownership differs in container)
+git config --global --add safe.directory "$KNOWLEDGE_REPO_PATH"
+
 # JSON logging functions (matching Anvil style)
 log() {
   echo "{\"level\":\"info\",\"message\":\"$1\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" >&2
