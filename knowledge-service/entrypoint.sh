@@ -77,7 +77,7 @@ fi
 # Derive GITHUB_REPO from VAULT_KNOWLEDGE_REPO_URL if not already set
 # Converts https://github.com/owner/repo.git → owner/repo
 if [ -z "$GITHUB_REPO" ] && [ -n "$VAULT_KNOWLEDGE_REPO_URL" ]; then
-  GITHUB_REPO=$(echo "$VAULT_KNOWLEDGE_REPO_URL" | sed -E 's|.*/([^/]+)/([^/]+?)(.git)?$|\1/\2|')
+  GITHUB_REPO=$(echo "$VAULT_KNOWLEDGE_REPO_URL" | sed -E 's|^[a-z]+://[^/]+/||' | sed 's|\.git$||')
   log "Derived GITHUB_REPO from URL: $GITHUB_REPO"
 fi
 
