@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     cmake \
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 22 (QMD v1.0.8 requires Node >= 22)
@@ -91,8 +92,6 @@ RUN mkdir -p /data/knowledge-repo /data/workspace && chown -R appuser:appuser /d
 # Health check: verify the service is responding
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
-
-USER appuser
 
 EXPOSE 8000
 
