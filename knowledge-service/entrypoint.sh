@@ -53,6 +53,12 @@ if [ -z "$VAULT_KNOWLEDGE_REPO_URL" ] && [ ! -d "$KNOWLEDGE_REPO_PATH/.git" ]; t
   exit 1
 fi
 
+# Reject SSH URLs — container has no SSH binary or keys; HTTPS + GITHUB_TOKEN required
+if echo "$VAULT_KNOWLEDGE_REPO_URL" | grep -qE '^(git@|ssh://)'; then
+  log_err "SSH repo URLs are not supported in the container (no SSH binary or keys). Set VAULT_KNOWLEDGE_REPO_URL to an HTTPS URL (https://github.com/owner/repo) and provide GITHUB_TOKEN."
+  exit 1
+fi
+
 # Clone if not already present
 if [ -n "$VAULT_KNOWLEDGE_REPO_URL" ] && [ ! -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
   log "Cloning knowledge repo from $VAULT_KNOWLEDGE_REPO_URL..."
@@ -82,6 +88,22 @@ if [ -n "$GITHUB_TOKEN" ] && [ -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
 fi
 git -C "$KNOWLEDGE_REPO_PATH" config user.email "horus@local" 2>/dev/null || true
 git -C "$KNOWLEDGE_REPO_PATH" config user.name "Horus Vault Sync" 2>/dev/null || true
+
+# Reconcile remote URL — if existing clone has SSH remote but VAULT_KNOWLEDGE_REPO_URL is HTTPS, update it
+if [ -n "$VAULT_KNOWLEDGE_REPO_URL" ] && [ -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
+  CURRENT_REMOTE=$(git -C "$KNOWLEDGE_REPO_PATH" remote get-url origin 2>/dev/null || echo "")
+  if echo "$CURRENT_REMOTE" | grep -qE '^(git@|ssh://)'; then
+    log "Existing clone has SSH remote ($CURRENT_REMOTE) — updating to HTTPS..."
+    if [ -n "$GITHUB_TOKEN" ]; then
+      NEW_REMOTE=$(echo "$VAULT_KNOWLEDGE_REPO_URL" | sed "s|https://|https://${GITHUB_TOKEN}@|")
+    else
+      NEW_REMOTE="$VAULT_KNOWLEDGE_REPO_URL"
+      log_err "Warning: GITHUB_TOKEN not set — remote updated to plain HTTPS, push operations may fail"
+    fi
+    git -C "$KNOWLEDGE_REPO_PATH" remote set-url origin "$NEW_REMOTE"
+    log "Remote URL updated to HTTPS"
+  fi
+fi
 
 # Bootstrap _schema/ from defaults if schema.yaml is missing
 if [ ! -f "$KNOWLEDGE_REPO_PATH/_schema/schema.yaml" ]; then
