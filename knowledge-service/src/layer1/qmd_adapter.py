@@ -166,7 +166,7 @@ class QMDAdapter(SearchStore):
         """Perform BM25 keyword search."""
         if self._rest:
             try:
-                collections = [collection] if collection else None
+                collections = [collection] if collection else ["shared", "workspace"]
                 raw = self._rest.search(query, "lex", collections, limit)
                 return self._parse_rest_results(raw, collection)
             except Exception:
@@ -187,7 +187,7 @@ class QMDAdapter(SearchStore):
         """Perform semantic vector search."""
         if self._rest:
             try:
-                collections = [collection] if collection else None
+                collections = [collection] if collection else ["shared", "workspace"]
                 raw = self._rest.search(query, "vec", collections, limit)
                 return self._parse_rest_results(raw, collection)
             except Exception:
@@ -208,7 +208,7 @@ class QMDAdapter(SearchStore):
         """Perform hybrid search (BM25 + vector + reranking)."""
         if self._rest:
             try:
-                collections = [collection] if collection else None
+                collections = [collection] if collection else ["shared", "workspace"]
                 raw = self._rest.multi_search(
                     [{"type": "lex", "query": query}, {"type": "vec", "query": query}],
                     collections, limit,
