@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ "$(id -u)" -eq 0 ]; then
+  chown -R appuser:appuser /data/knowledge-repo /data/workspace /home/appuser
+  exec gosu appuser "$0" "$@"
+fi
+
 # Variables at top
 KNOWLEDGE_REPO_PATH=${KNOWLEDGE_REPO_PATH:-/data/knowledge-repo}
 WORKSPACE_PATH=${WORKSPACE_PATH:-/data/workspace}
