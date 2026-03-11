@@ -14,9 +14,17 @@ logger = logging.getLogger(__name__)
 
 class FallbackSearchStore(SearchStore):
 
+    # Minimum top score to consider QMD results useful. Below this threshold
+    # we fall through to FTS5 (e.g. QMD body-weight bug returns ~0.000002).
+    MIN_USEFUL_SCORE = 0.01
+
     def __init__(self, primary: QMDAdapter, fallback: FtsSearchEngine) -> None:
         self._primary = primary
         self._fallback = fallback
+
+    def _has_useful_scores(self, results: list[SearchResult]) -> bool:
+        """Check if search results have meaningful relevance scores."""
+        return bool(results) and max(r.score for r in results) >= self.MIN_USEFUL_SCORE
 
     # Delegate collection management to both
     def ensure_collections(self, shared_path: str = "/data/knowledge-repo", workspace_path: str = "/workspace") -> None:
@@ -26,8 +34,11 @@ class FallbackSearchStore(SearchStore):
     def search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
         try:
             results = self._primary.search(query, collection, limit)
-            if results:
+            if self._has_useful_scores(results):
                 return results
+            if results:
+                logger.info("QMD returned %d results but max score %.6f < %.2f, falling back to FTS5",
+                            len(results), max(r.score for r in results), self.MIN_USEFUL_SCORE)
         except Exception:
             logger.warning("QMD search failed for '%s', falling back to FTS5", query)
         return self._fallback.search(query, collection, limit)
@@ -35,7 +46,7 @@ class FallbackSearchStore(SearchStore):
     def semantic_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
         try:
             results = self._primary.semantic_search(query, collection, limit)
-            if results:
+            if self._has_useful_scores(results):
                 return results
         except Exception:
             logger.warning("QMD semantic search failed for '%s', falling back to FTS5", query)
@@ -44,7 +55,7 @@ class FallbackSearchStore(SearchStore):
     def hybrid_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
         try:
             results = self._primary.hybrid_search(query, collection, limit)
-            if results:
+            if self._has_useful_scores(results):
                 return results
         except Exception:
             logger.warning("QMD hybrid search failed for '%s', falling back to FTS5", query)
