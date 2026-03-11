@@ -169,8 +169,8 @@ class QMDAdapter(SearchStore):
                 collections = [collection] if collection else None
                 raw = self._rest.search(query, "lex", collections, limit)
                 return self._parse_rest_results(raw, collection)
-            except Exception:
-                logger.warning("HTTP BM25 search failed for query: %s", query)
+            except Exception as e:
+                logger.warning("HTTP BM25 search failed for query '%s': %s", query, e)
                 return []
 
         args_list = ["search", query, "--json", "-n", str(limit)]
@@ -190,8 +190,8 @@ class QMDAdapter(SearchStore):
                 collections = [collection] if collection else None
                 raw = self._rest.search(query, "vec", collections, limit)
                 return self._parse_rest_results(raw, collection)
-            except Exception:
-                logger.warning("HTTP semantic search failed for query: %s", query)
+            except Exception as e:
+                logger.warning("HTTP semantic search failed for query '%s': %s", query, e)
                 return []
 
         args_list = ["vsearch", query, "--json", "-n", str(limit)]
@@ -214,8 +214,8 @@ class QMDAdapter(SearchStore):
                     collections, limit,
                 )
                 return self._parse_rest_results(raw, collection)
-            except Exception:
-                logger.warning("HTTP hybrid search failed for query: %s", query)
+            except Exception as e:
+                logger.warning("HTTP hybrid search failed for query '%s': %s", query, e)
                 return []
 
         args_list = ["query", query, "--json", "-n", str(limit)]

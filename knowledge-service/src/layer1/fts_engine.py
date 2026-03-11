@@ -120,9 +120,10 @@ class FtsSearchEngine(SearchStore):
 
         results = []
         for file_path, coll, score, snippet in rows:
+            raw = -(score or 0)  # BM25 returns negative; flip for positive
             results.append(SearchResult(
                 file_path=file_path,
-                score=-(score or 0),  # BM25 returns negative; flip for positive = better
+                score=raw / (1 + raw) if raw > 0 else 0.0,  # Normalize to [0, 1)
                 snippet=snippet or "",
                 collection=coll or "",
             ))
