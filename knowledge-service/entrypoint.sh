@@ -12,6 +12,7 @@ VAULT_SYNC_INTERVAL=${VAULT_SYNC_INTERVAL:-300}
 GITHUB_TOKEN=${GITHUB_TOKEN:-}
 GITHUB_REPO=${GITHUB_REPO:-}
 GITHUB_BASE_BRANCH=${GITHUB_BASE_BRANCH:-master}
+HORUS_RUNTIME=${HORUS_RUNTIME:-docker}
 PULL_PID=""
 PYTHON_PID=""
 
@@ -46,6 +47,18 @@ log "Workspace: $WORKSPACE_PATH"
 log "Port: $PORT"
 log "Host: $HOST"
 log "Log level: $LOG_LEVEL"
+
+# ── Podman runtime fixups ────────────────────────────────────────────────────
+# Under Podman with user-namespace remapping, bind-mounted directories may be
+# owned by a remapped UID. Fix ownership so appuser can write.
+# Under Docker Desktop (macOS gRPC-FUSE), chown on bind mounts fails on
+# read-only git objects (mode 0444) — skip it entirely.
+if [ "$HORUS_RUNTIME" = "podman" ]; then
+  chown -R appuser:appuser /data/knowledge-repo 2>/dev/null || true
+  chown -R appuser:appuser /data/workspace 2>/dev/null || true
+  chown -R appuser:appuser /home/appuser/.cache/qmd 2>/dev/null || true
+  git config --global safe.directory '*'
+fi
 
 # Fail fast if no repo configured and no data present
 if [ -z "$VAULT_KNOWLEDGE_REPO_URL" ] && [ ! -d "$KNOWLEDGE_REPO_PATH/.git" ]; then
