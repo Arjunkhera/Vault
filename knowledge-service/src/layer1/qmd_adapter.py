@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
 class _QMDRestClient:
     """Lightweight REST client for QMD daemon /query endpoint (v1.1.0+)."""
 
+    # Match Anvil's 8-second timeout strategy: fail fast and let the
+    # FallbackSearchStore degrade to FTS5 rather than hanging for 30s+
+    # waiting for the reranker model to cold-start.
+    TIMEOUT_SECONDS = 8.0
+
     def __init__(self, daemon_url: str) -> None:
         self._query_url = daemon_url.rstrip("/") + "/query"
 
@@ -52,7 +57,7 @@ class _QMDRestClient:
         }
         if collections:
             body["collections"] = collections
-        resp = httpx.post(self._query_url, json=body, timeout=30.0)
+        resp = httpx.post(self._query_url, json=body, timeout=self.TIMEOUT_SECONDS)
         resp.raise_for_status()
         return resp.json().get("results", [])
 
@@ -65,7 +70,7 @@ class _QMDRestClient:
         }
         if collections:
             body["collections"] = collections
-        resp = httpx.post(self._query_url, json=body, timeout=60.0)
+        resp = httpx.post(self._query_url, json=body, timeout=self.TIMEOUT_SECONDS)
         resp.raise_for_status()
         return resp.json().get("results", [])
 
