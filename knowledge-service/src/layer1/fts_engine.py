@@ -121,12 +121,21 @@ class FtsSearchEngine(SearchStore):
         results = []
         for file_path, coll, score, snippet in rows:
             raw = -(score or 0)  # BM25 returns negative; flip for positive
+            normalized = raw / (1 + raw) if raw > 0 else 0.0
             results.append(SearchResult(
                 file_path=file_path,
-                score=raw / (1 + raw) if raw > 0 else 0.0,  # Normalize to [0, 1)
+                score=normalized,
                 snippet=snippet or "",
                 collection=coll or "",
             ))
+
+        # BM25 produces near-zero scores when a term appears in >50% of docs
+        # (negative IDF). When this happens, fall back to rank-based scoring
+        # so results are still meaningfully ordered.
+        if results and max(r.score for r in results) < 0.01:
+            for i, r in enumerate(results):
+                r.score = max(0.5 - i * 0.03, 0.1)
+
         return results
 
     def semantic_search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
