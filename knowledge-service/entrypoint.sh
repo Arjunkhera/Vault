@@ -1,7 +1,12 @@
 #!/bin/bash
 set -e
 
-if [ "$(id -u)" -eq 0 ]; then
+# ── Privilege handling ────────────────────────────────────────────────────────
+# Under Docker: chown bind-mounted dirs to appuser, then drop to appuser via gosu.
+# Under Podman rootless: root inside the container is already the unprivileged
+# host user (user-namespace remapping), and chown on virtiofs bind mounts fails
+# with EPERM. Skip chown+gosu entirely and keep running as root.
+if [ "$(id -u)" -eq 0 ] && [ "${HORUS_RUNTIME:-docker}" != "podman" ]; then
   chown -R appuser:appuser /data/knowledge-repo /data/workspace /home/appuser
   exec gosu appuser "$0" "$@"
 fi
