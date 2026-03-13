@@ -331,16 +331,31 @@ class QMDAdapter(SearchStore):
         shared SQLite database so the daemon picks up new documents automatically.
         Uses per-collection update to avoid touching the 'anvil' collection
         (Anvil is responsible for its own collection).
+
+        The embed step runs in the background because it can take 10+ minutes
+        on first boot (model download + embedding). Server startup should not
+        be blocked by this — the QMD HTTP daemon handles searches independently.
         """
         for coll in ["shared", "workspace"]:
             try:
                 self._run_qmd(["update", "-c", coll])
             except VaultError as e:
                 logger.error("Re-index failed for collection '%s': %s", coll, e.message)
+        # Run embed in background — it can take 10+ minutes on first boot
+        # (GGUF model download + embedding generation). The QMD HTTP daemon
+        # handles searches independently, so blocking startup is unnecessary.
         try:
-            self._run_qmd(["embed"])
-        except VaultError as e:
-            logger.warning("Embed failed (non-fatal, daemon handles search): %s", e.message)
+            if self._rest:
+                cmd = ["qmd", "embed"]
+            else:
+                cmd = ["qmd", "--index", self.index_name, "embed"]
+            logger.info("Starting QMD embed in background (pid logged when started)...")
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+            )
+            logger.info("QMD embed started in background (PID: %d)", proc.pid)
+        except Exception as e:
+            logger.warning("Failed to start background embed (non-fatal): %s", e)
 
     def status(self) -> dict[str, Any]:  # type: ignore[type-arg]
         """Get index status using 'qmd status'."""
