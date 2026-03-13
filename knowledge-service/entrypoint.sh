@@ -26,6 +26,12 @@ HORUS_RUNTIME=${HORUS_RUNTIME:-docker}
 PULL_PID=""
 PYTHON_PID=""
 
+# Clear stale safe.directory entries left over from a previous container restart.
+# Without this, --add accumulates duplicates and a subsequent plain SET fails
+# with "cannot overwrite multiple values" (git exit code 5), crash-looping the
+# container under restart: unless-stopped.
+git config --global --unset-all safe.directory 2>/dev/null || true
+
 # Mark bind-mounted path as safe for git (CVE-2022-24765: ownership differs in container)
 git config --global --add safe.directory "$KNOWLEDGE_REPO_PATH"
 
@@ -70,7 +76,7 @@ if [ "$HORUS_RUNTIME" = "podman" ]; then
   chown -R appuser:appuser /data/knowledge-repo 2>/dev/null || true
   chown -R appuser:appuser /data/workspace 2>/dev/null || true
   chown -R appuser:appuser /home/appuser/.cache/qmd 2>/dev/null || true
-  git config --global safe.directory '*'
+  git config --global --replace-all safe.directory '*'
 fi
 
 # Fail fast if no repo configured and no data present
