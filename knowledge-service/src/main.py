@@ -86,8 +86,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Collections setup complete")
     except Exception as e:
-        logger.error("Failed to setup collections: %s", e)
-        raise
+        logger.warning("QMD collection setup failed (non-fatal, FTS5 fallback available): %s", e)
 
     # Build initial FTS5 index so fallback is ready immediately
     logger.info("Building FTS5 fallback index...")

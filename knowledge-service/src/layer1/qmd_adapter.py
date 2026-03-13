@@ -340,8 +340,7 @@ class QMDAdapter(SearchStore):
         try:
             self._run_qmd(["embed"])
         except VaultError as e:
-            logger.error("Embed failed: %s", e.message)
-            raise
+            logger.warning("Embed failed (non-fatal, daemon handles search): %s", e.message)
 
     def status(self) -> dict[str, Any]:  # type: ignore[type-arg]
         """Get index status using 'qmd status'."""
