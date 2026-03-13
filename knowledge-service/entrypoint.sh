@@ -7,7 +7,10 @@ set -e
 # host user (user-namespace remapping), and chown on virtiofs bind mounts fails
 # with EPERM. Skip chown+gosu entirely and keep running as root.
 if [ "$(id -u)" -eq 0 ] && [ "${HORUS_RUNTIME:-docker}" != "podman" ]; then
-  chown -R appuser:appuser /data/knowledge-repo /data/workspace /home/appuser
+  # Best-effort chown: on macOS Docker Desktop (VirtioFS/gRPC-FUSE), chown
+  # fails on git pack files (mode 0444) with EPERM. Tolerate partial failures
+  # — the important directories will still be owned correctly.
+  chown -R appuser:appuser /data/knowledge-repo /data/workspace /home/appuser 2>/dev/null || true
   exec gosu appuser "$0" "$@"
 fi
 
