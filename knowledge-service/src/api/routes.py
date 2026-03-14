@@ -23,6 +23,7 @@ from typing import Annotated, Any
 
 from ..config.settings import VaultSettings
 from ..layer1.interface import SearchStore
+from ..layer2.uuid_registry import UUIDRegistry
 from ..layer2.frontmatter import parse_page, to_page_summary, to_page_full
 from ..layer2.scope import resolve_scope, collect_operational_pages
 from ..layer2.mode_filter import (
@@ -111,6 +112,18 @@ def get_settings() -> VaultSettings:
 
 
 SettingsDepends = Annotated[VaultSettings, Depends(get_settings)]
+
+
+def get_uuid_registry() -> UUIDRegistry:
+    """
+    Dependency injection for UUIDRegistry.
+
+    Placeholder replaced via dependency_overrides in main.py.
+    """
+    raise NotImplementedError("UUIDRegistry dependency not configured")
+
+
+UUIDRegistryDepends = Annotated[UUIDRegistry, Depends(get_uuid_registry)]
 
 
 # ============================================================================
@@ -229,34 +242,43 @@ async def search(request: SearchRequest, store: StoreDepends) -> SearchResponse:
     return await asyncio.to_thread(_search_sync, request, store)
 
 
-def _get_page_sync(request: GetPageRequest, store: SearchStore) -> PageFull:
+def _get_page_sync(request: GetPageRequest, store: SearchStore, registry: UUIDRegistry) -> PageFull:
     """Synchronous implementation of get-page."""
-    content = store.get_document(request.id)
+    file_path = registry.resolve(request.id)
+    if not file_path:
+        raise not_found("Page", request.id)
 
+    # store.get_document expects a collection-prefixed path (e.g. "shared/repos/anvil.md")
+    store_path = f"shared/{file_path}"
+    content = store.get_document(store_path)
     if not content:
         raise not_found("Page", request.id)
 
     parsed = parse_page(content)
-    return to_page_full(parsed, request.id)
+    return to_page_full(parsed, store_path)
 
 
 @router.post("/get-page", response_model=PageFull)
-async def get_page(request: GetPageRequest, store: StoreDepends) -> PageFull:
-    """Retrieve a full page by its identifier (file path or title)."""
-    return await asyncio.to_thread(_get_page_sync, request, store)
+async def get_page(request: GetPageRequest, store: StoreDepends, registry: UUIDRegistryDepends) -> PageFull:
+    """Retrieve a full page by its UUID."""
+    return await asyncio.to_thread(_get_page_sync, request, store, registry)
 
 
-def _get_related_sync(request: GetRelatedRequest, store: SearchStore) -> GetRelatedResponse:
+def _get_related_sync(request: GetRelatedRequest, store: SearchStore, registry: UUIDRegistry) -> GetRelatedResponse:
     """Synchronous implementation of get-related."""
-    content = store.get_document(request.id)
+    file_path = registry.resolve(request.id)
+    if not file_path:
+        raise not_found("Page", request.id)
 
+    store_path = f"shared/{file_path}"
+    content = store.get_document(store_path)
     if not content:
         raise not_found("Page", request.id)
 
     parsed = parse_page(content)
-    source_summary = to_page_summary(parsed, request.id)
+    source_summary = to_page_summary(parsed, store_path)
 
-    related_pages_tuples = get_related_pages(parsed, store)
+    related_pages_tuples = get_related_pages(parsed, store, registry=registry)
     related_summaries = to_summaries(related_pages_tuples)
 
     return GetRelatedResponse(
@@ -266,9 +288,9 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore) -> GetRela
 
 
 @router.post("/get-related", response_model=GetRelatedResponse)
-async def get_related(request: GetRelatedRequest, store: StoreDepends) -> GetRelatedResponse:
+async def get_related(request: GetRelatedRequest, store: StoreDepends, registry: UUIDRegistryDepends) -> GetRelatedResponse:
     """Follow links from a page to find related pages."""
-    return await asyncio.to_thread(_get_related_sync, request, store)
+    return await asyncio.to_thread(_get_related_sync, request, store, registry)
 
 
 def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore) -> ListByScopeResponse:
@@ -506,6 +528,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
     """Synchronous implementation of write-page."""
     import frontmatter as fm
     import hashlib
+    import uuid as uuid_lib
     from datetime import datetime
 
     # Validate GitHub configuration
@@ -529,6 +552,23 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
             f"Failed to parse YAML frontmatter: {e}",
             {"error_type": type(e).__name__}
         )
+
+    # Inject UUID if not already present
+    content = request.content
+    if not metadata.get("id"):
+        page_id = str(uuid_lib.uuid4())
+        # Inject id as first frontmatter field
+        if content.startswith("---"):
+            # Insert 'id: <uuid>' after the opening '---' line
+            lines = content.split("\n", 2)
+            # lines[0] = '---', lines[1] = first field or closing '---', lines[2] = rest
+            content = lines[0] + "\n" + f"id: {page_id}" + "\n" + "\n".join(lines[1:])
+        else:
+            # No frontmatter block — prepend one
+            content = f"---\nid: {page_id}\n---\n" + content
+        metadata["id"] = page_id
+    else:
+        page_id = str(metadata["id"])
 
     # Validate against schema
     if not loader.page_types:
@@ -571,7 +611,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
 
     pr_url, commit_sha = writer.write_page(
         page_path=path,
-        content=request.content,
+        content=content,
         branch=branch,
         commit_message=commit_message,
         pr_title=pr_title,
@@ -579,9 +619,10 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
     )
 
     logger.info(
-        "Page written and PR created: %s → %s",
+        "Page written and PR created: %s → %s (page_id: %s)",
         request.path,
         pr_url,
+        page_id,
         extra={"commit_sha": commit_sha}
     )
 
@@ -590,6 +631,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
         branch=branch,
         commit_sha=commit_sha,
         path=path,
+        page_id=page_id,
     )
 
 

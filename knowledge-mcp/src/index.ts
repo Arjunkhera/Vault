@@ -145,12 +145,13 @@ const TOOLS: Tool[] = [
   {
     name: "knowledge_get_page",
     description:
-      "Retrieve the full content of a specific knowledge page by its ID (file path). " +
-      "Use this after finding a relevant page via search or resolve-context.",
+      "Retrieve the full content of a specific knowledge page by its UUID. " +
+      "Use this after finding a relevant page via search or resolve-context — " +
+      "the `id` field in search results is the UUID to pass here.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Page identifier (e.g., 'repos/anvil.md')" },
+        id: { type: "string", description: "UUID of the page (from search result `id` field)" },
       },
       required: ["id"],
     },
@@ -163,7 +164,7 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Source page identifier" },
+        id: { type: "string", description: "UUID of the source page" },
       },
       required: ["id"],
     },
@@ -270,7 +271,9 @@ const TOOLS: Tool[] = [
     name: "knowledge_write_page",
     description:
       "Write a validated knowledge page to the knowledge-base repo, commit it to a new branch, " +
-      "and open a GitHub PR for human review. Returns the PR URL.",
+      "and open a GitHub PR for human review. New pages get a UUIDv4 auto-generated and stamped " +
+      "into their frontmatter; existing pages (content already has `id` in frontmatter) preserve " +
+      "their UUID unchanged. Returns the PR URL and the page UUID as `page_id`.",
     inputSchema: {
       type: "object",
       properties: {
