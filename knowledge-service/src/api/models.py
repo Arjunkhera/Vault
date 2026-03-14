@@ -310,3 +310,4 @@ class WritePageResponse(BaseModel):
     branch: str = Field(..., description="Branch name created")
     commit_sha: str = Field(..., description="SHA of the commit")
     path: str = Field(..., description="Relative file path written")
+    page_id: Optional[str] = Field(None, description="UUID of the written page (auto-generated for new pages)")

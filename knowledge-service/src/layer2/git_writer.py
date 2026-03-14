@@ -12,6 +12,7 @@ All operations are synchronous (blocking) — called via asyncio.to_thread() in 
 """
 
 import subprocess
+import uuid as uuid_lib
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +47,38 @@ class GitWriter:
         self.github_repo = github_repo
         self.base_branch = base_branch
 
+    def _inject_uuid_if_missing(self, content: str) -> str:
+        """
+        Ensure the page content has an `id` field in its YAML frontmatter.
+
+        If the frontmatter already contains an `id` key, the content is returned
+        unchanged. Otherwise, a UUIDv4 is generated and inserted as the first
+        field in the frontmatter block.
+
+        Args:
+            content: Full markdown content with YAML frontmatter
+
+        Returns:
+            Content with `id` guaranteed to be present in frontmatter
+        """
+        # Quick check: if "id:" appears in the frontmatter, skip injection
+        if content.startswith("---"):
+            closing = content.find("---", 3)
+            if closing != -1:
+                frontmatter_block = content[3:closing]
+                for line in frontmatter_block.splitlines():
+                    if line.startswith("id:") or line.startswith("id :"):
+                        return content  # id already present
+
+        # Inject id as the first frontmatter field
+        new_id = str(uuid_lib.uuid4())
+        if content.startswith("---"):
+            lines = content.split("\n", 2)
+            content = lines[0] + "\n" + f"id: {new_id}" + "\n" + "\n".join(lines[1:])
+        else:
+            content = f"---\nid: {new_id}\n---\n" + content
+        return content
+
     def write_page(
         self,
         page_path: str,
@@ -59,13 +92,14 @@ class GitWriter:
         Write a page to a feature branch and create a GitHub PR.
 
         Steps:
-        1. Checkout base_branch (ensure clean state)
-        2. Create and checkout feature branch
-        3. Write page content to disk
-        4. Stage and commit
-        5. Push to origin
-        6. Create PR via GitHub API
-        7. Return to base_branch
+        1. Ensure content has a UUID in frontmatter (inject if missing)
+        2. Checkout base_branch (ensure clean state)
+        3. Create and checkout feature branch
+        4. Write page content to disk
+        5. Stage and commit
+        6. Push to origin
+        7. Create PR via GitHub API
+        8. Return to base_branch
 
         Args:
             page_path: Relative path within repo (e.g., "repos/anvil.md")
@@ -82,6 +116,9 @@ class GitWriter:
             VaultError(GIT_ERROR) if git operations fail
             VaultError(GITHUB_API_ERROR) if PR creation fails
         """
+        # Stamp UUID into frontmatter for new pages (no-op if already present)
+        content = self._inject_uuid_if_missing(content)
+
         try:
             # Ensure we're on a clean base
             self._git("checkout", self.base_branch)

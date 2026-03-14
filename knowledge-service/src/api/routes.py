@@ -278,7 +278,7 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore, registry: 
     parsed = parse_page(content)
     source_summary = to_page_summary(parsed, store_path)
 
-    related_pages_tuples = get_related_pages(parsed, store)
+    related_pages_tuples = get_related_pages(parsed, store, registry=registry)
     related_summaries = to_summaries(related_pages_tuples)
 
     return GetRelatedResponse(
@@ -528,6 +528,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
     """Synchronous implementation of write-page."""
     import frontmatter as fm
     import hashlib
+    import uuid as uuid_lib
     from datetime import datetime
 
     # Validate GitHub configuration
@@ -551,6 +552,23 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
             f"Failed to parse YAML frontmatter: {e}",
             {"error_type": type(e).__name__}
         )
+
+    # Inject UUID if not already present
+    content = request.content
+    if not metadata.get("id"):
+        page_id = str(uuid_lib.uuid4())
+        # Inject id as first frontmatter field
+        if content.startswith("---"):
+            # Insert 'id: <uuid>' after the opening '---' line
+            lines = content.split("\n", 2)
+            # lines[0] = '---', lines[1] = first field or closing '---', lines[2] = rest
+            content = lines[0] + "\n" + f"id: {page_id}" + "\n" + "\n".join(lines[1:])
+        else:
+            # No frontmatter block — prepend one
+            content = f"---\nid: {page_id}\n---\n" + content
+        metadata["id"] = page_id
+    else:
+        page_id = str(metadata["id"])
 
     # Validate against schema
     if not loader.page_types:
@@ -593,7 +611,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
 
     pr_url, commit_sha = writer.write_page(
         page_path=path,
-        content=request.content,
+        content=content,
         branch=branch,
         commit_message=commit_message,
         pr_title=pr_title,
@@ -601,9 +619,10 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
     )
 
     logger.info(
-        "Page written and PR created: %s → %s",
+        "Page written and PR created: %s → %s (page_id: %s)",
         request.path,
         pr_url,
+        page_id,
         extra={"commit_sha": commit_sha}
     )
 
@@ -612,6 +631,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
         branch=branch,
         commit_sha=commit_sha,
         path=path,
+        page_id=page_id,
     )
 
 
