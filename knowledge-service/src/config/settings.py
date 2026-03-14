@@ -35,6 +35,7 @@ class VaultSettings:
     github_token: str = ""
     github_repo: str = ""
     github_base_branch: str = "master"
+    github_api_host: str = ""
 
     def log_sources(self, sources: dict[str, str]) -> None:
         """Log which source each value came from."""
@@ -48,6 +49,7 @@ class VaultSettings:
             "log_level",
             "github_repo",
             "github_base_branch",
+            "github_api_host",
         ]:
             value = getattr(self, field_name)
             source = sources.get(field_name, "unknown")
@@ -85,6 +87,7 @@ def load_settings(
         "github_token": "default",
         "github_repo": "default",
         "github_base_branch": "default",
+        "github_api_host": "default",
     }
 
     # Layer 1: Config file
@@ -114,6 +117,7 @@ def load_settings(
                     "github_token": str,
                     "github_repo": str,
                     "github_base_branch": str,
+                    "github_api_host": str,
                 }
                 for field_name, type_fn in field_map.items():
                     if field_name in file_config:
@@ -156,6 +160,7 @@ def load_settings(
         "GITHUB_TOKEN": ("github_token", str),
         "GITHUB_REPO": ("github_repo", str),
         "GITHUB_BASE_BRANCH": ("github_base_branch", str),
+        "GITHUB_API_HOST": ("github_api_host", str),
     }
     for env_key, (field_name, type_fn) in env_map.items():
         val = os.getenv(env_key)

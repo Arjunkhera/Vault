@@ -31,7 +31,8 @@ class GitWriter:
         repo_path: str,
         github_token: str,
         github_repo: str,
-        base_branch: str = "master"
+        base_branch: str = "master",
+        github_api_host: str = "",
     ) -> None:
         """
         Initialize GitWriter.
@@ -41,11 +42,15 @@ class GitWriter:
             github_token: GitHub personal access token (with repo scope)
             github_repo: GitHub repo in format "owner/repo" (e.g., "arkhera/knowledge-base")
             base_branch: Base branch to branch from (default: "master")
+            github_api_host: GitHub API hostname. Empty or "github.com" uses api.github.com.
+                             Set to a GitHub Enterprise hostname (e.g., "github.acme.com") to
+                             use the GHE REST API at https://{host}/api/v3/.
         """
         self.repo_path = repo_path
         self.github_token = github_token
         self.github_repo = github_repo
         self.base_branch = base_branch
+        self.github_api_host = github_api_host
 
     def _inject_uuid_if_missing(self, content: str) -> str:
         """
@@ -234,7 +239,11 @@ class GitWriter:
             raise github_api_error("httpx library not available")
 
         try:
-            url = f"https://api.github.com/repos/{self.github_repo}/pulls"
+            host = self.github_api_host.strip()
+            if host and host != "github.com":
+                url = f"https://{host}/api/v3/repos/{self.github_repo}/pulls"
+            else:
+                url = f"https://api.github.com/repos/{self.github_repo}/pulls"
             headers = {
                 "Authorization": f"Bearer {self.github_token}",
                 "Accept": "application/vnd.github+json",
