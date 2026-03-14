@@ -7,6 +7,7 @@ Uses python-frontmatter library for robust YAML parsing.
 
 from dataclasses import dataclass, field
 from typing import Optional
+from uuid import uuid4
 import frontmatter
 
 from ..api.models import PageSummary, PageFull
@@ -16,9 +17,12 @@ from ..api.models import PageSummary, PageFull
 class ParsedPage:
     """
     Structured representation of a knowledge page with parsed frontmatter.
-    
+
     All fields have sensible defaults to handle incomplete or missing frontmatter gracefully.
     """
+    # System identity field — UUIDv4, generated on parse if not present in frontmatter
+    id: Optional[str] = None
+
     # Required fields
     type: str = "concept"  # Default to generic concept if not specified
     title: str = "Untitled"
@@ -87,6 +91,7 @@ def parse_page(content: str) -> ParsedPage:
     
     # Build ParsedPage with defaults for missing fields
     return ParsedPage(
+        id=metadata.get("id") or str(uuid4()),
         type=metadata.get("type", "concept"),
         title=metadata.get("title", "Untitled"),
         description=metadata.get("description", ""),
@@ -108,20 +113,21 @@ def parse_page(content: str) -> ParsedPage:
 def to_page_summary(parsed: ParsedPage, file_path: str, score: float = 0.0) -> PageSummary:
     """
     Convert a ParsedPage to a PageSummary for progressive disclosure.
-    
+
     PageSummary includes only the description, not the full body content.
     This allows agents to filter results before requesting full pages.
-    
+
     Args:
         parsed: ParsedPage object with parsed frontmatter
-        file_path: Path to the file (used as the page ID)
+        file_path: Path to the file (carried in `path` field for internal use)
         score: Optional relevance score from search (0.0-1.0)
-        
+
     Returns:
         PageSummary model suitable for API responses
     """
     return PageSummary(
-        id=file_path,
+        id=parsed.id,
+        path=file_path,
         title=parsed.title,
         description=parsed.description,
         type=parsed.type,
@@ -135,13 +141,13 @@ def to_page_summary(parsed: ParsedPage, file_path: str, score: float = 0.0) -> P
 def to_page_full(parsed: ParsedPage, file_path: str) -> PageFull:
     """
     Convert a ParsedPage to a PageFull with complete content.
-    
+
     PageFull includes the full body content and all relationship fields.
-    
+
     Args:
         parsed: ParsedPage object with parsed frontmatter
-        file_path: Path to the file (used as the page ID)
-        
+        file_path: Path to the file (carried in `path` field for internal use)
+
     Returns:
         PageFull model suitable for API responses
     """
@@ -153,9 +159,10 @@ def to_page_full(parsed: ParsedPage, file_path: str) -> PageFull:
         else:
             # Handle datetime.date or datetime.datetime objects
             last_verified_str = str(parsed.last_verified)
-    
+
     return PageFull(
-        id=file_path,
+        id=parsed.id,
+        path=file_path,
         title=parsed.title,
         description=parsed.description,
         type=parsed.type,
