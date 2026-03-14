@@ -242,32 +242,41 @@ async def search(request: SearchRequest, store: StoreDepends) -> SearchResponse:
     return await asyncio.to_thread(_search_sync, request, store)
 
 
-def _get_page_sync(request: GetPageRequest, store: SearchStore) -> PageFull:
+def _get_page_sync(request: GetPageRequest, store: SearchStore, registry: UUIDRegistry) -> PageFull:
     """Synchronous implementation of get-page."""
-    content = store.get_document(request.id)
+    file_path = registry.resolve(request.id)
+    if not file_path:
+        raise not_found("Page", request.id)
 
+    # store.get_document expects a collection-prefixed path (e.g. "shared/repos/anvil.md")
+    store_path = f"shared/{file_path}"
+    content = store.get_document(store_path)
     if not content:
         raise not_found("Page", request.id)
 
     parsed = parse_page(content)
-    return to_page_full(parsed, request.id)
+    return to_page_full(parsed, store_path)
 
 
 @router.post("/get-page", response_model=PageFull)
-async def get_page(request: GetPageRequest, store: StoreDepends) -> PageFull:
-    """Retrieve a full page by its identifier (file path or title)."""
-    return await asyncio.to_thread(_get_page_sync, request, store)
+async def get_page(request: GetPageRequest, store: StoreDepends, registry: UUIDRegistryDepends) -> PageFull:
+    """Retrieve a full page by its UUID."""
+    return await asyncio.to_thread(_get_page_sync, request, store, registry)
 
 
-def _get_related_sync(request: GetRelatedRequest, store: SearchStore) -> GetRelatedResponse:
+def _get_related_sync(request: GetRelatedRequest, store: SearchStore, registry: UUIDRegistry) -> GetRelatedResponse:
     """Synchronous implementation of get-related."""
-    content = store.get_document(request.id)
+    file_path = registry.resolve(request.id)
+    if not file_path:
+        raise not_found("Page", request.id)
 
+    store_path = f"shared/{file_path}"
+    content = store.get_document(store_path)
     if not content:
         raise not_found("Page", request.id)
 
     parsed = parse_page(content)
-    source_summary = to_page_summary(parsed, request.id)
+    source_summary = to_page_summary(parsed, store_path)
 
     related_pages_tuples = get_related_pages(parsed, store)
     related_summaries = to_summaries(related_pages_tuples)
@@ -279,9 +288,9 @@ def _get_related_sync(request: GetRelatedRequest, store: SearchStore) -> GetRela
 
 
 @router.post("/get-related", response_model=GetRelatedResponse)
-async def get_related(request: GetRelatedRequest, store: StoreDepends) -> GetRelatedResponse:
+async def get_related(request: GetRelatedRequest, store: StoreDepends, registry: UUIDRegistryDepends) -> GetRelatedResponse:
     """Follow links from a page to find related pages."""
-    return await asyncio.to_thread(_get_related_sync, request, store)
+    return await asyncio.to_thread(_get_related_sync, request, store, registry)
 
 
 def _list_by_scope_sync(request: ListByScopeRequest, store: SearchStore) -> ListByScopeResponse:
