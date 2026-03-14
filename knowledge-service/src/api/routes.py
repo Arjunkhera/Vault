@@ -607,6 +607,7 @@ def _write_page_sync(request: WritePageRequest, loader: SchemaLoader, settings: 
         github_token=settings.github_token,
         github_repo=settings.github_repo,
         base_branch=settings.github_base_branch,
+        github_api_host=settings.github_api_host,
     )
 
     pr_url, commit_sha = writer.write_page(
