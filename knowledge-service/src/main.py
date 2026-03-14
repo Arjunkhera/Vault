@@ -28,7 +28,8 @@ from .layer1.qmd_adapter import QMDAdapter
 from .layer1.fts_engine import FtsSearchEngine
 from .layer1.fallback_store import FallbackSearchStore
 from .layer2.schema import SchemaLoader
-from .api.routes import router, get_store, get_schema_loader, get_settings
+from .layer2.uuid_registry import UUIDRegistry
+from .api.routes import router, get_store, get_schema_loader, get_settings, get_uuid_registry
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 from .errors import VaultError, VaultErrorResponse, VaultErrorDetail, ErrorCode
 
@@ -115,10 +116,22 @@ async def lifespan(app: FastAPI):
 
     app.state.schema_loader = schema_loader
 
+    # Build UUID registry from knowledge repo pages
+    logger.info("Building UUID registry...")
+    uuid_registry = UUIDRegistry()
+    try:
+        uuid_registry.build(settings.knowledge_repo_path)
+        logger.info("UUID registry ready (%d pages)", uuid_registry.count())
+    except Exception as e:
+        logger.warning("UUID registry build failed (non-fatal): %s", e)
+
+    app.state.uuid_registry = uuid_registry
+
     # Start sync daemon (git pull loop + workspace watcher)
     logger.info("Starting sync daemon...")
     git_pull_task, workspace_observer = await start_sync_daemon(
         store=store,
+        uuid_registry=uuid_registry,
         knowledge_repo_path=settings.knowledge_repo_path,
         workspace_path=settings.workspace_path,
         sync_interval=settings.sync_interval,
@@ -219,6 +232,14 @@ def get_settings_override(request: Request):
 
 
 app.dependency_overrides[get_settings] = get_settings_override
+
+
+def get_uuid_registry_override(request: Request):
+    """Dependency override to inject UUIDRegistry from app state."""
+    return request.app.state.uuid_registry
+
+
+app.dependency_overrides[get_uuid_registry] = get_uuid_registry_override
 
 # Include API routes
 app.include_router(router, prefix="", tags=["knowledge"])

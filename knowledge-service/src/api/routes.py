@@ -23,6 +23,7 @@ from typing import Annotated, Any
 
 from ..config.settings import VaultSettings
 from ..layer1.interface import SearchStore
+from ..layer2.uuid_registry import UUIDRegistry
 from ..layer2.frontmatter import parse_page, to_page_summary, to_page_full
 from ..layer2.scope import resolve_scope, collect_operational_pages
 from ..layer2.mode_filter import (
@@ -111,6 +112,18 @@ def get_settings() -> VaultSettings:
 
 
 SettingsDepends = Annotated[VaultSettings, Depends(get_settings)]
+
+
+def get_uuid_registry() -> UUIDRegistry:
+    """
+    Dependency injection for UUIDRegistry.
+
+    Placeholder replaced via dependency_overrides in main.py.
+    """
+    raise NotImplementedError("UUIDRegistry dependency not configured")
+
+
+UUIDRegistryDepends = Annotated[UUIDRegistry, Depends(get_uuid_registry)]
 
 
 # ============================================================================
