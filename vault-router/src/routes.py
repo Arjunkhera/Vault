@@ -384,6 +384,7 @@ async def schema(
     Route /schema to the default vault (schema is assumed uniform across vaults).
 
     If vault= is specified in the body, route to that vault instead.
+    Proxies to upstream as GET /schema (knowledge-service uses GET for schema).
     """
     body = await request.json()
     vault_name = body.get("vault") or settings.vault_default
@@ -393,7 +394,7 @@ async def schema(
 
     url = f"{base_url.rstrip('/')}/schema"
     try:
-        response = await vault_client.post(url, json=body)
+        response = await vault_client.get(url)
         response.raise_for_status()
         return response.json()
     except Exception as e:
