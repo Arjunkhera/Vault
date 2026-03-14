@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse
 
 from .client import VaultClient
 from .settings import VaultRouterSettings, load_settings
+from .uuid_registry import CrossVaultUUIDRegistry, start_registry_refresh_loop
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +73,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     logger.info("Vault Router ready")
 
+    # Build cross-vault UUID registry
+    uuid_registry = CrossVaultUUIDRegistry()
+    await uuid_registry.build(settings.vault_endpoints, vault_client)
+    app.state.uuid_registry = uuid_registry
+
+    # Start background refresh loop
+    refresh_task = await start_registry_refresh_loop(
+        uuid_registry, settings.vault_endpoints, vault_client
+    )
+    app.state.registry_refresh_task = refresh_task
+
     yield
 
-    # Shutdown
-    logger.info("Shutting down Vault Router...")
+    # Shutdown: cancel refresh task
+    refresh_task.cancel()
+    try:
+        await refresh_task
+    except asyncio.CancelledError:
+        pass
     await vault_client.stop()
     logger.info("Vault Router stopped")
 

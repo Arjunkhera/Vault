@@ -13,6 +13,7 @@ from fastapi import APIRouter, Request, Depends
 
 from .client import VaultClient
 from .settings import VaultRouterSettings
+from .uuid_registry import CrossVaultUUIDRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,12 @@ def get_vault_client(request: Request) -> VaultClient:
 
 SettingsDepends = Annotated[VaultRouterSettings, Depends(get_settings)]
 ClientDepends = Annotated[VaultClient, Depends(get_vault_client)]
+
+
+def get_uuid_registry(request: Request) -> CrossVaultUUIDRegistry:
+    return request.app.state.uuid_registry
+
+UUIDRegistryDepends = Annotated[CrossVaultUUIDRegistry, Depends(get_uuid_registry)]
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -70,14 +77,11 @@ async def health(settings: SettingsDepends, vault_client: ClientDepends) -> dict
 # ── Registry status ───────────────────────────────────────────────────────────
 
 @router.get("/registry-status")
-async def registry_status(settings: SettingsDepends) -> dict[str, Any]:
-    """
-    Show the UUID registry status (placeholder — populated in B2).
-
-    Returns vault names and endpoints for now.
-    """
-    return {
-        "vaults": list(settings.vault_endpoints.keys()),
-        "default": settings.vault_default,
-        "uuid_registry": "not_built",  # Updated in B2 when registry is implemented
-    }
+async def registry_status(
+    settings: SettingsDepends,
+    uuid_registry: UUIDRegistryDepends,
+) -> dict[str, Any]:
+    """Show UUID registry status: per-vault page counts and last refresh time."""
+    status = uuid_registry.status()
+    status["default_vault"] = settings.vault_default
+    return status
