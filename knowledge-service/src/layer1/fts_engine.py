@@ -38,8 +38,13 @@ class FtsSearchEngine(SearchStore):
             return self._conn
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-        self._conn.execute("""
+        self._create_table(self._conn)
+        return self._conn
+
+    def _create_table(self, conn: sqlite3.Connection) -> None:
+        conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+                uuid UNINDEXED,
                 file_path UNINDEXED,
                 collection UNINDEXED,
                 title,
@@ -49,7 +54,6 @@ class FtsSearchEngine(SearchStore):
                 tokenize='porter'
             )
         """)
-        return self._conn
 
     def _sanitize_query(self, query: str) -> str:
         cleaned = re.sub(r'[()":^~{}#:]', '', query).strip()
@@ -62,7 +66,10 @@ class FtsSearchEngine(SearchStore):
 
     def reindex(self) -> None:
         conn = self._ensure_db()
-        conn.execute("DELETE FROM pages_fts")
+
+        # Full rebuild from scratch — drop and recreate to pick up schema changes
+        conn.execute("DROP TABLE IF EXISTS pages_fts")
+        self._create_table(conn)
 
         # Import here to avoid circular imports
         from ..layer2.frontmatter import parse_page
@@ -78,18 +85,27 @@ class FtsSearchEngine(SearchStore):
                 try:
                     content = md_file.read_text(encoding="utf-8")
                     parsed = parse_page(content)
-                    relative = str(md_file.relative_to(root))
+                    relative = md_file.relative_to(root).as_posix()
                     file_path = f"{coll_name}/{relative}"
                     conn.execute(
-                        "INSERT INTO pages_fts(file_path, collection, title, description, body, tags) VALUES (?, ?, ?, ?, ?, ?)",
-                        (file_path, coll_name, parsed.title or "", parsed.description or "", parsed.body or content, ",".join(parsed.tags or []))
+                        "INSERT INTO pages_fts(uuid, file_path, collection, title, description, body, tags) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            parsed.id or "",
+                            file_path,
+                            coll_name,
+                            parsed.title or "",
+                            parsed.description or "",
+                            parsed.body or content,
+                            ",".join(parsed.tags or []),
+                        )
                     )
                     count += 1
                 except Exception as e:
                     logger.warning("Failed to index %s: %s", md_file, e)
 
         conn.commit()
-        logger.info("FTS5 index rebuilt: %d pages indexed", count)
+        logger.info("FTS5 index rebuilt from scratch: %d pages indexed", count)
 
     def search(self, query: str, collection: Optional[str] = None, limit: int = 10) -> list[SearchResult]:
         conn = self._ensure_db()
@@ -97,9 +113,9 @@ class FtsSearchEngine(SearchStore):
 
         if collection:
             rows = conn.execute(
-                """SELECT file_path, collection,
-                          bm25(pages_fts, 0, 0, 10.0, 5.0, 1.0, 2.0) as score,
-                          snippet(pages_fts, 4, '<b>', '</b>', '...', 64) as snip
+                """SELECT uuid, file_path, collection,
+                          bm25(pages_fts, 0, 0, 0, 10.0, 5.0, 1.0, 2.0) as score,
+                          snippet(pages_fts, 5, '<b>', '</b>', '...', 64) as snip
                    FROM pages_fts
                    WHERE pages_fts MATCH ? AND collection = ?
                    ORDER BY score
@@ -108,9 +124,9 @@ class FtsSearchEngine(SearchStore):
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT file_path, collection,
-                          bm25(pages_fts, 0, 0, 10.0, 5.0, 1.0, 2.0) as score,
-                          snippet(pages_fts, 4, '<b>', '</b>', '...', 64) as snip
+                """SELECT uuid, file_path, collection,
+                          bm25(pages_fts, 0, 0, 0, 10.0, 5.0, 1.0, 2.0) as score,
+                          snippet(pages_fts, 5, '<b>', '</b>', '...', 64) as snip
                    FROM pages_fts
                    WHERE pages_fts MATCH ?
                    ORDER BY score
@@ -119,7 +135,7 @@ class FtsSearchEngine(SearchStore):
             ).fetchall()
 
         results = []
-        for file_path, coll, score, snippet in rows:
+        for uuid_val, file_path, coll, score, snippet in rows:
             raw = -(score or 0)  # BM25 returns negative; flip for positive
             normalized = raw / (1 + raw) if raw > 0 else 0.0
             results.append(SearchResult(
@@ -127,6 +143,7 @@ class FtsSearchEngine(SearchStore):
                 score=normalized,
                 snippet=snippet or "",
                 collection=coll or "",
+                id=uuid_val or None,
             ))
 
         # BM25 produces near-zero scores when a term appears in >50% of docs
