@@ -33,6 +33,12 @@ from ..layer2.mode_filter import (
     filter_by_tags,
     to_summaries
 )
+from ..layer1.typesense_client import (
+    TypesenseSearchClient,
+    SearchQuery,
+    SearchFilters,
+)
+from ..layer1.indexer import index_page
 from ..layer2.link_navigator import get_related_pages
 from ..layer2.schema import SchemaLoader, PageValidator, RegistryEntry
 from ..layer2.suggester import MetadataSuggester
@@ -114,6 +120,18 @@ def get_settings() -> VaultSettings:
 SettingsDepends = Annotated[VaultSettings, Depends(get_settings)]
 
 
+def get_typesense_client() -> TypesenseSearchClient:
+    """
+    Dependency injection for TypesenseSearchClient.
+
+    Placeholder replaced via dependency_overrides in main.py.
+    """
+    raise NotImplementedError("TypesenseSearchClient dependency not configured")
+
+
+TypesenseDepends = Annotated[TypesenseSearchClient, Depends(get_typesense_client)]
+
+
 def get_uuid_registry() -> UUIDRegistry:
     """
     Dependency injection for UUIDRegistry.
@@ -133,26 +151,124 @@ UUIDRegistryDepends = Annotated[UUIDRegistry, Depends(get_uuid_registry)]
 # uvicorn event loop.
 # ============================================================================
 
-def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore) -> ResolveContextResponse:
-    """Synchronous implementation of resolve-context."""
-    doc_cache = store.get_all_documents()
-    scope = resolve_scope(request.repo, store, doc_cache=doc_cache)
-    operational_pages_tuples = collect_operational_pages(scope, store, doc_cache=doc_cache)
+def _resolve_context_sync(
+    request: ResolveContextRequest,
+    store: SearchStore,
+    ts_client: TypesenseSearchClient,
+) -> ResolveContextResponse:
+    """
+    Synchronous implementation of resolve-context.
+
+    Uses Typesense for deterministic lookup:
+    1. Query Typesense with exact filter: source:=vault && source_type:=repo-profile && scope_repo:={repo}
+    2. Read the repo profile page, extract program from scope metadata
+    3. Query Typesense for operational pages: source:=vault && mode:=operational && scope_program:={program}
+    4. Also query for repo-level operational pages: scope_repo:={repo}
+    5. Return profile + operational pages
+
+    Falls back to the old text-search approach if Typesense is unavailable.
+    """
+    # Step 1: Deterministic lookup for repo-profile via Typesense
+    profile_query = SearchQuery(
+        q="*",
+        filters=SearchFilters(
+            source=["vault"],
+            source_type=["repo-profile"],
+            scope_repo=request.repo,
+        ),
+        limit=1,
+    )
+    profile_response = ts_client.search(profile_query)
 
     entry_point: PageSummary | None = None
-    results = store.search(request.repo, limit=20)
+    program: str | None = None
 
-    for result in results:
-        content = doc_cache.get(result.file_path)
-        if not content:
-            continue
+    if not profile_response.search_unavailable and profile_response.results:
+        # Found the repo profile via Typesense -- deterministic match
+        profile_result = profile_response.results[0]
+        profile_content = store.get_document(profile_result.id)
 
-        parsed = parse_page(content)
+        if profile_content:
+            parsed_profile = parse_page(profile_content)
+            entry_point = to_page_summary(parsed_profile, profile_result.id)
+            program = parsed_profile.scope.get("program")
+    elif profile_response.search_unavailable:
+        # Typesense unavailable -- fall back to old search-based approach
+        logger.warning("Typesense unavailable for resolve-context, falling back to text search")
+        doc_cache = store.get_all_documents()
+        results = store.search(request.repo, limit=20)
+        for result in results:
+            content = doc_cache.get(result.file_path)
+            if not content:
+                continue
+            parsed = parse_page(content)
+            if parsed.type == "repo-profile" and parsed.scope.get("repo") == request.repo:
+                entry_point = to_page_summary(parsed, result.file_path)
+                program = parsed.scope.get("program")
+                break
 
-        if parsed.type == "repo-profile" and parsed.scope.get("repo") == request.repo:
-            entry_point = to_page_summary(parsed, result.file_path)
-            break
+    # Build the scope
+    from ..layer2.scope import Scope
+    scope = Scope(repo=request.repo, program=program)
 
+    # Step 2: Collect operational pages via Typesense
+    operational_pages_tuples: list[tuple[Any, str]] = []
+
+    if not profile_response.search_unavailable:
+        # Query for repo-level operational pages
+        repo_ops_query = SearchQuery(
+            q="*",
+            filters=SearchFilters(
+                source=["vault"],
+                mode=["operational"],
+                scope_repo=request.repo,
+            ),
+            limit=50,
+        )
+        repo_ops = ts_client.search(repo_ops_query)
+
+        # Query for program-level operational pages (if program resolved)
+        program_ops_results = []
+        if program:
+            program_ops_query = SearchQuery(
+                q="*",
+                filters=SearchFilters(
+                    source=["vault"],
+                    mode=["operational"],
+                    scope_program=program,
+                ),
+                limit=50,
+            )
+            program_ops = ts_client.search(program_ops_query)
+            program_ops_results = program_ops.results if not program_ops.search_unavailable else []
+
+        # Merge and deduplicate: repo-level first (higher specificity), then program-level
+        seen_ids: set[str] = set()
+        all_op_results = []
+
+        for r in (repo_ops.results if not repo_ops.search_unavailable else []):
+            if r.id not in seen_ids:
+                seen_ids.add(r.id)
+                all_op_results.append(r)
+
+        for r in program_ops_results:
+            if r.id not in seen_ids:
+                seen_ids.add(r.id)
+                all_op_results.append(r)
+
+        # Load full page content for each operational page
+        for op_result in all_op_results:
+            op_content = store.get_document(op_result.id)
+            if op_content:
+                parsed_op = parse_page(op_content)
+                if parsed_op.mode == "operational":
+                    operational_pages_tuples.append((parsed_op, op_result.id))
+    else:
+        # Fallback: use old approach
+        doc_cache = store.get_all_documents()
+        operational_pages_tuples = collect_operational_pages(scope, store, doc_cache=doc_cache)
+
+    # Build response
     if request.include_full:
         operational_pages_list: list[PageFull] = [
             to_page_full(page, path)
@@ -161,6 +277,7 @@ def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore) ->
         operational_pages: list[PageSummary | PageFull] = operational_pages_list  # type: ignore[assignment]
     else:
         operational_pages = to_summaries(operational_pages_tuples)
+
     return ResolveContextResponse(
         entry_point=entry_point,
         operational_pages=operational_pages,
@@ -169,27 +286,85 @@ def _resolve_context_sync(request: ResolveContextRequest, store: SearchStore) ->
 
 
 @router.post("/resolve-context", response_model=ResolveContextResponse)
-async def resolve_context(request: ResolveContextRequest, store: StoreDepends) -> ResolveContextResponse:
+async def resolve_context(
+    request: ResolveContextRequest,
+    store: StoreDepends,
+    ts_client: TypesenseDepends,
+) -> ResolveContextResponse:
     """
     Resolve the scope for a repo and return operational pages.
 
     Given a repo name:
-    1. Resolves program membership (repo → program)
-    2. Finds all operational pages applicable to the repo or its program
-    3. Returns the repo-profile page as entry_point
-    4. Returns operational pages sorted by specificity (repo-level first)
+    1. Queries Typesense for exact repo-profile match (deterministic, not text search)
+    2. Extracts program membership from the repo profile scope
+    3. Queries Typesense for operational pages at repo and program level
+    4. Returns the repo-profile page as entry_point
+    5. Returns operational pages sorted by specificity (repo-level first)
+
+    Falls back to text search if Typesense is unavailable.
     """
-    return await asyncio.to_thread(_resolve_context_sync, request, store)
+    return await asyncio.to_thread(_resolve_context_sync, request, store, ts_client)
 
 
-def _search_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
-    """Synchronous implementation of search."""
-    # BM25 keyword search. Hybrid disabled — see WI-4.
+def _search_sync(
+    request: SearchRequest,
+    store: SearchStore,
+    ts_client: TypesenseSearchClient,
+) -> SearchResponse:
+    """Synchronous implementation of search using Typesense."""
+
+    # Build Typesense search query with automatic source:=vault filter
+    filters = SearchFilters(source=["vault"])
+
+    if request.mode:
+        filters.mode = [request.mode]
+
+    if request.type:
+        filters.source_type = [request.type]
+
+    if request.scope:
+        if request.scope.repo:
+            filters.scope_repo = request.scope.repo
+        if request.scope.program:
+            filters.scope_program = request.scope.program
+
+    ts_query = SearchQuery(
+        q=request.query,
+        filters=filters,
+        limit=request.limit,
+    )
+
+    ts_response = ts_client.search(ts_query)
+
+    if ts_response.search_unavailable:
+        # Fallback to old search path
+        logger.warning("Typesense unavailable for search, falling back to store search")
+        return _search_fallback_sync(request, store)
+
+    # Map Typesense results back to existing PageSummary format
+    summaries: list[PageSummary] = []
+
+    for result in ts_response.results:
+        # Load full page to get description and other fields
+        content = store.get_document(result.id)
+        if not content:
+            continue
+
+        parsed = parse_page(content)
+        summary = to_page_summary(parsed, result.id, score=result.score)
+        summaries.append(summary)
+
+    return SearchResponse(
+        results=summaries,
+        total=len(summaries),
+    )
+
+
+def _search_fallback_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
+    """Fallback search using old QMD/FTS5 path when Typesense is unavailable."""
     search_results = store.search(request.query, limit=request.limit * 2)
     doc_cache = store.get_all_documents()
 
-    # If both search and doc_cache returned nothing, this is likely a system
-    # error (e.g. QMD down AND FTS5 index empty) rather than "no results".
     if not search_results and not doc_cache:
         logger.error(
             "Search returned zero results AND doc_cache is empty for query '%s'. "
@@ -232,14 +407,19 @@ def _search_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest, store: StoreDepends) -> SearchResponse:
+async def search(
+    request: SearchRequest,
+    store: StoreDepends,
+    ts_client: TypesenseDepends,
+) -> SearchResponse:
     """
-    Full-text and semantic search with progressive disclosure.
+    Full-text search with progressive disclosure.
 
-    Uses BM25 keyword search (hybrid disabled).
+    Queries Typesense with automatic source:=vault filter.
+    Falls back to QMD/FTS5 if Typesense is unavailable.
     Returns PageSummary objects (descriptions only) to enable filtering.
     """
-    return await asyncio.to_thread(_search_sync, request, store)
+    return await asyncio.to_thread(_search_sync, request, store, ts_client)
 
 
 def _get_page_sync(request: GetPageRequest, store: SearchStore, registry: UUIDRegistry) -> PageFull:
@@ -641,6 +821,7 @@ async def write_page(
     request: WritePageRequest,
     loader: SchemaLoaderDepends,
     settings: SettingsDepends,
+    ts_client: TypesenseDepends,
 ) -> WritePageResponse:
     """
     Write a validated knowledge page to the knowledge-base repo, commit it to a new branch,
@@ -657,4 +838,14 @@ async def write_page(
 
     Requires GitHub configuration (GITHUB_TOKEN, GITHUB_REPO).
     """
-    return await asyncio.to_thread(_write_page_sync, request, loader, settings)
+    result = await asyncio.to_thread(_write_page_sync, request, loader, settings)
+
+    # Index the written page into Typesense (non-blocking on failure)
+    try:
+        # Determine vault_name from the path prefix
+        vault_name = "shared"
+        await asyncio.to_thread(index_page, ts_client, request.content, result.path, vault_name)
+    except Exception as e:
+        logger.warning("Failed to index written page '%s' to Typesense: %s", result.path, e)
+
+    return result
