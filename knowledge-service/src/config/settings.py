@@ -36,6 +36,12 @@ class VaultSettings:
     github_repo: str = ""
     github_base_branch: str = "master"
 
+    # Typesense configuration
+    typesense_host: str = "localhost"
+    typesense_port: int = 8108
+    typesense_api_key: str = "horus-local-key"
+    typesense_protocol: str = "http"
+
     def log_sources(self, sources: dict[str, str]) -> None:
         """Log which source each value came from."""
         for field_name in [
@@ -48,6 +54,8 @@ class VaultSettings:
             "log_level",
             "github_repo",
             "github_base_branch",
+            "typesense_host",
+            "typesense_port",
         ]:
             value = getattr(self, field_name)
             source = sources.get(field_name, "unknown")
@@ -57,6 +65,11 @@ class VaultSettings:
         token_source = sources.get("github_token", "unknown")
         token_set = bool(self.github_token)
         logger.info("  github_token: %s (from %s)", "set" if token_set else "not set", token_source)
+
+        # Log typesense_api_key presence without exposing value
+        ts_key_source = sources.get("typesense_api_key", "unknown")
+        ts_key_set = self.typesense_api_key != "horus-local-key"
+        logger.info("  typesense_api_key: %s (from %s)", "custom" if ts_key_set else "default", ts_key_source)
 
 
 def load_settings(
@@ -85,6 +98,10 @@ def load_settings(
         "github_token": "default",
         "github_repo": "default",
         "github_base_branch": "default",
+        "typesense_host": "default",
+        "typesense_port": "default",
+        "typesense_api_key": "default",
+        "typesense_protocol": "default",
     }
 
     # Layer 1: Config file
@@ -114,6 +131,10 @@ def load_settings(
                     "github_token": str,
                     "github_repo": str,
                     "github_base_branch": str,
+                    "typesense_host": str,
+                    "typesense_port": int,
+                    "typesense_api_key": str,
+                    "typesense_protocol": str,
                 }
                 for field_name, type_fn in field_map.items():
                     if field_name in file_config:
@@ -156,6 +177,10 @@ def load_settings(
         "GITHUB_TOKEN": ("github_token", str),
         "GITHUB_REPO": ("github_repo", str),
         "GITHUB_BASE_BRANCH": ("github_base_branch", str),
+        "TYPESENSE_HOST": ("typesense_host", str),
+        "TYPESENSE_PORT": ("typesense_port", int),
+        "TYPESENSE_API_KEY": ("typesense_api_key", str),
+        "TYPESENSE_PROTOCOL": ("typesense_protocol", str),
     }
     for env_key, (field_name, type_fn) in env_map.items():
         val = os.getenv(env_key)

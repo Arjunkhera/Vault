@@ -27,8 +27,10 @@ from .config.settings import load_settings
 from .layer1.qmd_adapter import QMDAdapter
 from .layer1.fts_engine import FtsSearchEngine
 from .layer1.fallback_store import FallbackSearchStore
+from .layer1.typesense_client import TypesenseSearchClient
+from .layer1.indexer import full_reindex
 from .layer2.schema import SchemaLoader
-from .api.routes import router, get_store, get_schema_loader, get_settings
+from .api.routes import router, get_store, get_schema_loader, get_settings, get_typesense_client
 from .sync.daemon import start_sync_daemon, stop_sync_daemon
 from .errors import VaultError, VaultErrorResponse, VaultErrorDetail, ErrorCode
 
@@ -95,6 +97,29 @@ async def lifespan(app: FastAPI):
         logger.info("FTS5 fallback index ready")
     except Exception as e:
         logger.warning("FTS5 index build failed (non-fatal): %s", e)
+
+    # Initialize Typesense search client
+    logger.info("Initializing Typesense search client...")
+    ts_client = TypesenseSearchClient(
+        host=settings.typesense_host,
+        port=settings.typesense_port,
+        api_key=settings.typesense_api_key,
+        protocol=settings.typesense_protocol,
+    )
+
+    # Run full re-index into Typesense (non-blocking on failure)
+    try:
+        collection_paths = {
+            "shared": settings.knowledge_repo_path,
+            "workspace": settings.workspace_path,
+        }
+        indexed = full_reindex(ts_client, collection_paths)
+        logger.info("Typesense full re-index complete: %d pages", indexed)
+    except Exception as e:
+        logger.warning("Typesense re-index failed (non-fatal, search degraded): %s", e)
+
+    # Store Typesense client in app state
+    app.state.typesense_client = ts_client
 
     # Store fallback store in app state for dependency injection
     app.state.store = store
@@ -219,6 +244,14 @@ def get_settings_override(request: Request):
 
 
 app.dependency_overrides[get_settings] = get_settings_override
+
+
+def get_typesense_client_override(request: Request):
+    """Dependency override to inject TypesenseSearchClient from app state."""
+    return request.app.state.typesense_client
+
+
+app.dependency_overrides[get_typesense_client] = get_typesense_client_override
 
 # Include API routes
 app.include_router(router, prefix="", tags=["knowledge"])
