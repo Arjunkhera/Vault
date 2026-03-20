@@ -275,14 +275,25 @@ async def full_status(request: Request):
     try:
         store = request.app.state.store
         index_status = await asyncio.to_thread(store.status)
+
+        # Include Typesense health if client is available
+        typesense_status = None
+        ts_client = getattr(request.app.state, "typesense_client", None)
+        if ts_client is not None:
+            typesense_status = await asyncio.to_thread(ts_client.status)
+
+        response_content: dict = {
+            "status": "ok",
+            "service": "knowledge-service",
+            "version": "0.1.0",
+            "index": index_status,
+        }
+        if typesense_status is not None:
+            response_content["typesense"] = typesense_status
+
         return JSONResponse(
             status_code=200,
-            content={
-                "status": "ok",
-                "service": "knowledge-service",
-                "version": "0.1.0",
-                "index": index_status
-            }
+            content=response_content,
         )
     except Exception as e:
         logger.error("Status check failed: %s", e)

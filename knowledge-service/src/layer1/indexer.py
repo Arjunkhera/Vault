@@ -12,7 +12,7 @@ so that cross-service search works transparently.
 import logging
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .typesense_client import TypesenseSearchClient
 from ..layer2.frontmatter import parse_page, ParsedPage
@@ -42,7 +42,7 @@ def page_to_document(
 
     body = (page.body or "")[:20_000]  # 20K truncation
 
-    return {
+    doc: dict[str, Any] = {
         "id": doc_id,
         "source": "vault",
         "source_type": page.type,
@@ -50,12 +50,19 @@ def page_to_document(
         "body": body,
         "tags": page.tags or [],
         "mode": page.mode or "reference",
-        "scope_repo": page.scope.get("repo") if page.scope else None,
-        "scope_program": page.scope.get("program") if page.scope else None,
         "vault_name": vault_name,
         "created_at": 0,  # Vault pages don't track created_at in frontmatter
         "modified_at": 0,  # Vault pages don't track modified_at in frontmatter
     }
+
+    scope_repo = page.scope.get("repo") if page.scope else None
+    scope_program = page.scope.get("program") if page.scope else None
+    if scope_repo is not None:
+        doc["scope_repo"] = scope_repo
+    if scope_program is not None:
+        doc["scope_program"] = scope_program
+
+    return doc
 
 
 def index_page(
@@ -142,6 +149,9 @@ def full_reindex(
         for md_file in root.rglob("*.md"):
             # Skip _schema directory files and hidden files
             if md_file.name.startswith("_") or "/_schema/" in str(md_file):
+                continue
+            # Skip files inside hidden directories (e.g. .git, .obsidian)
+            if any(part.startswith('.') for part in md_file.relative_to(root).parts):
                 continue
             # Skip common non-knowledge files
             if md_file.name in ("README.md", "CHANGELOG.md", "LICENSE.md"):

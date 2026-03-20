@@ -252,7 +252,7 @@ def _resolve_context_sync(
                     operational_pages_tuples.append((parsed_op, op_result.id))
     else:
         # Fallback: use old approach
-        doc_cache = store.get_all_documents() if not hasattr(store, '_fallback_doc_cache') else {}
+        doc_cache = store.get_all_documents()
         operational_pages_tuples = collect_operational_pages(scope, store, doc_cache=doc_cache)
 
     # Build response
@@ -801,7 +801,7 @@ async def write_page(
     try:
         # Determine vault_name from the path prefix
         vault_name = "shared"
-        index_page(ts_client, request.content, result.path, vault_name)
+        await asyncio.to_thread(index_page, ts_client, request.content, result.path, vault_name)
     except Exception as e:
         logger.warning("Failed to index written page '%s' to Typesense: %s", result.path, e)
 

@@ -14,7 +14,6 @@ The client:
 """
 
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -149,14 +148,25 @@ class TypesenseSearchClient:
 
     # ── Collection management ────────────────────────────────────────────
 
-    def ensure_collection(self) -> None:
-        """Create the horus_documents collection if it does not exist."""
+    def ensure_collection(self) -> bool:
+        """Create the horus_documents collection if it does not exist.
+
+        Returns True on success, False if the connection failed.
+        """
         try:
             self._client.collections[self._collection_name].retrieve()
             logger.info("Typesense collection '%s' already exists", self._collection_name)
+            return True
         except ObjectNotFound:
             self._client.collections.create(COLLECTION_SCHEMA)
             logger.info("Created Typesense collection '%s'", self._collection_name)
+            return True
+        except (ConnectionError, OSError) as e:
+            logger.warning("Typesense connection error in ensure_collection: %s", e)
+            return False
+        except Exception as e:
+            logger.warning("Typesense ensure_collection failed: %s", e)
+            return False
 
     def drop_collection(self) -> None:
         """Drop the collection (used for full re-index)."""
