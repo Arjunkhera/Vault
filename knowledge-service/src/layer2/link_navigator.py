@@ -9,35 +9,49 @@ import re
 from typing import Optional
 
 from ..layer1.interface import SearchStore
+from ..layer2.uuid_registry import UUIDRegistry
 from .frontmatter import ParsedPage, parse_page
 
+# Matches a bare UUID — used to detect UUID references in relationship fields
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
-def get_related_pages(page: ParsedPage, store: SearchStore) -> list[tuple[ParsedPage, str]]:
+
+def get_related_pages(
+    page: ParsedPage,
+    store: SearchStore,
+    registry: Optional[UUIDRegistry] = None,
+) -> list[tuple[ParsedPage, str]]:
     """
     Follow links from a page to find all related pages.
-    
+
     Strategy:
     1. Collect all references from the page's relationship fields:
        - related: explicitly linked pages
        - depends_on: upstream dependencies
        - consumed_by: downstream consumers
        - applies_to: cross-cutting references
-    2. Extract reference text from various formats:
+    2. For each reference, try UUID resolution first (if registry provided):
+       - Bare UUID strings are resolved via UUIDRegistry to get file_path,
+         then the page is loaded directly from the store
+    3. Fall back to text extraction + search for legacy formats:
        - Wiki-links: [[Page Title]] → "Page Title"
        - Dict refs: {"repo": "name"} → "name"
        - Plain strings: "name" → "name"
-    3. Search for each reference in the store
     4. Parse and verify matches
     5. Return deduplicated list of (ParsedPage, file_path) tuples
-    
+
     Args:
         page: Source ParsedPage to follow links from
         store: SearchStore instance for searching
-        
+        registry: Optional UUIDRegistry for resolving UUID references directly
+
     Returns:
         List of (ParsedPage, file_path) tuples for all related pages found
         Deduplicated by file_path.
-        
+
     Example:
         >>> page = ParsedPage(
         ...     title="Document Service",
@@ -53,23 +67,35 @@ def get_related_pages(page: ParsedPage, store: SearchStore) -> list[tuple[Parsed
     all_references.extend(page.depends_on)
     all_references.extend(page.consumed_by)
     all_references.extend(page.applies_to)
-    
-    # Extract reference text from each item
-    reference_texts = []
-    for ref in all_references:
-        extracted = _extract_reference_text(ref)
-        if extracted:
-            reference_texts.append(extracted)
-    
-    # Search for each reference and collect matches
+
+    # Resolve each reference, using UUID registry where possible
     found_pages = {}  # Use dict to deduplicate by file_path
-    
-    for ref_text in reference_texts:
-        matches = _search_for_reference(ref_text, store)
-        for parsed, path in matches:
-            if path not in found_pages:
-                found_pages[path] = (parsed, path)
-    
+
+    for ref in all_references:
+        # UUID path: bare UUID string + registry available
+        if (
+            registry is not None
+            and isinstance(ref, str)
+            and _UUID_RE.match(ref.strip())
+        ):
+            file_path = registry.resolve(ref.strip())
+            if file_path:
+                store_path = f"shared/{file_path}"
+                content = store.get_document(store_path)
+                if content and store_path not in found_pages:
+                    parsed = parse_page(content)
+                    found_pages[store_path] = (parsed, store_path)
+            # UUID was recognised — skip legacy fallback regardless of resolution outcome
+            continue
+
+        # Legacy path: extract text and search
+        ref_text = _extract_reference_text(ref)
+        if ref_text:
+            matches = _search_for_reference(ref_text, store)
+            for parsed, path in matches:
+                if path not in found_pages:
+                    found_pages[path] = (parsed, path)
+
     return list(found_pages.values())
 
 

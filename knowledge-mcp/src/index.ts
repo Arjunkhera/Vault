@@ -9,6 +9,11 @@
  * Supports two transports:
  *   stdio (default) — for local use / Claude Desktop / Cursor IDE
  *   http            — for Docker deployment (--http --port 8300)
+ *
+ * All tools accept an optional `vault` parameter (string). When omitted:
+ *   - Read fan-out tools (search, resolve-context, etc.) query ALL vaults.
+ *   - Routed tools (get-page, write-page, etc.) use UUID registry or default vault.
+ * When specified, requests are restricted/routed to that named vault.
  */
 
 import * as http from "node:http";
@@ -74,17 +79,17 @@ async function callKnowledgeAPI(path: string, body: unknown): Promise<unknown> {
   return response.json();
 }
 
-async function callKnowledgeAPIGet(path: string): Promise<unknown> {
-  const response = await fetch(`${endpoint}${path}`, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`HTTP ${response.status}: ${response.statusText}\n${errorText}`);
-  }
-  return response.json();
-}
+// ── Shared vault parameter description ───────────────────────────────────────
+
+const VAULT_PARAM = {
+  vault: {
+    type: "string" as const,
+    description:
+      "Optional vault name (e.g. 'personal', 'work'). " +
+      "For read tools: restricts search to that vault only. " +
+      "For write/routed tools: routes directly to that vault instead of using UUID registry.",
+  },
+};
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -105,6 +110,7 @@ const TOOLS: Tool[] = [
           description: "If true, return full page content. If false (default), return summaries only.",
           default: false,
         },
+        ...VAULT_PARAM,
       },
       required: ["repo"],
     },
@@ -138,6 +144,7 @@ const TOOLS: Tool[] = [
           description: "Filter by scope (AND logic)",
         },
         limit: { type: "number", description: "Maximum results (default: 10)", default: 10 },
+        ...VAULT_PARAM,
       },
       required: ["query"],
     },
@@ -145,12 +152,14 @@ const TOOLS: Tool[] = [
   {
     name: "knowledge_get_page",
     description:
-      "Retrieve the full content of a specific knowledge page by its ID (file path). " +
-      "Use this after finding a relevant page via search or resolve-context.",
+      "Retrieve the full content of a specific knowledge page by its UUID. " +
+      "Use this after finding a relevant page via search or resolve-context — " +
+      "the `id` field in search results is the UUID to pass here.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Page identifier (e.g., 'repos/anvil.md')" },
+        id: { type: "string", description: "UUID of the page (from search result `id` field)" },
+        ...VAULT_PARAM,
       },
       required: ["id"],
     },
@@ -163,7 +172,8 @@ const TOOLS: Tool[] = [
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Source page identifier" },
+        id: { type: "string", description: "UUID of the source page" },
+        ...VAULT_PARAM,
       },
       required: ["id"],
     },
@@ -191,6 +201,7 @@ const TOOLS: Tool[] = [
         },
         tags: { type: "array", items: { type: "string" }, description: "AND logic" },
         limit: { type: "number", default: 50 },
+        ...VAULT_PARAM,
       },
       required: ["scope"],
     },
@@ -204,6 +215,7 @@ const TOOLS: Tool[] = [
       type: "object",
       properties: {
         content: { type: "string", description: "Full markdown with YAML frontmatter" },
+        ...VAULT_PARAM,
       },
       required: ["content"],
     },
@@ -218,6 +230,7 @@ const TOOLS: Tool[] = [
       properties: {
         content: { type: "string", description: "Full markdown — may have partial frontmatter" },
         hints: { type: "object", description: "Optional partial knowledge to improve suggestions" },
+        ...VAULT_PARAM,
       },
       required: ["content"],
     },
@@ -233,6 +246,7 @@ const TOOLS: Tool[] = [
         title: { type: "string", description: "Proposed page title" },
         content: { type: "string", description: "Page body content" },
         threshold: { type: "number", description: "Similarity threshold 0-1 (default: 0.75)", default: 0.75 },
+        ...VAULT_PARAM,
       },
       required: ["title", "content"],
     },
@@ -242,7 +256,12 @@ const TOOLS: Tool[] = [
     description:
       "Retrieve the full schema definition and all registry contents (tags, repos, programs). " +
       "Use this to understand available page types and valid values before generating pages.",
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...VAULT_PARAM,
+      },
+    },
   },
   {
     name: "knowledge_registry_add",
@@ -262,6 +281,7 @@ const TOOLS: Tool[] = [
           },
           required: ["id"],
         },
+        ...VAULT_PARAM,
       },
       required: ["registry", "entry"],
     },
@@ -270,7 +290,9 @@ const TOOLS: Tool[] = [
     name: "knowledge_write_page",
     description:
       "Write a validated knowledge page to the knowledge-base repo, commit it to a new branch, " +
-      "and open a GitHub PR for human review. Returns the PR URL.",
+      "and open a GitHub PR for human review. New pages get a UUIDv4 auto-generated and stamped " +
+      "into their frontmatter; existing pages (content already has `id` in frontmatter) preserve " +
+      "their UUID unchanged. Returns the PR URL and the page UUID as `page_id`.",
     inputSchema: {
       type: "object",
       properties: {
@@ -279,6 +301,7 @@ const TOOLS: Tool[] = [
         commit_message: { type: "string", description: "Git commit message (optional)" },
         pr_title: { type: "string", description: "GitHub PR title (optional)" },
         pr_body: { type: "string", description: "GitHub PR description body (optional)" },
+        ...VAULT_PARAM,
       },
       required: ["path", "content"],
     },
@@ -293,7 +316,7 @@ const TOOLS: Tool[] = [
  */
 function buildServer(): Server {
   const server = new Server(
-    { name: "@vault/knowledge-mcp", version: "0.2.0" },
+    { name: "@vault/knowledge-mcp", version: "0.3.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -311,6 +334,7 @@ function buildServer(): Server {
           result = await callKnowledgeAPI("/resolve-context", {
             repo: toolArgs.repo,
             include_full: toolArgs.include_full ?? false,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_search":
@@ -320,13 +344,20 @@ function buildServer(): Server {
             type: toolArgs.type,
             scope: toolArgs.scope,
             limit: toolArgs.limit ?? 10,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_get_page":
-          result = await callKnowledgeAPI("/get-page", { id: toolArgs.id });
+          result = await callKnowledgeAPI("/get-page", {
+            id: toolArgs.id,
+            vault: toolArgs.vault,
+          });
           break;
         case "knowledge_get_related":
-          result = await callKnowledgeAPI("/get-related", { id: toolArgs.id });
+          result = await callKnowledgeAPI("/get-related", {
+            id: toolArgs.id,
+            vault: toolArgs.vault,
+          });
           break;
         case "knowledge_list_by_scope":
           result = await callKnowledgeAPI("/list-by-scope", {
@@ -335,15 +366,20 @@ function buildServer(): Server {
             type: toolArgs.type,
             tags: toolArgs.tags,
             limit: toolArgs.limit ?? 50,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_validate_page":
-          result = await callKnowledgeAPI("/validate-page", { content: toolArgs.content });
+          result = await callKnowledgeAPI("/validate-page", {
+            content: toolArgs.content,
+            vault: toolArgs.vault,
+          });
           break;
         case "knowledge_suggest_metadata":
           result = await callKnowledgeAPI("/suggest-metadata", {
             content: toolArgs.content,
             hints: toolArgs.hints,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_check_duplicates":
@@ -351,15 +387,19 @@ function buildServer(): Server {
             title: toolArgs.title,
             content: toolArgs.content,
             threshold: toolArgs.threshold ?? 0.75,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_get_schema":
-          result = await callKnowledgeAPIGet("/schema");
+          result = await callKnowledgeAPI("/schema", {
+            vault: toolArgs.vault,
+          });
           break;
         case "knowledge_registry_add":
           result = await callKnowledgeAPI("/registry/add", {
             registry: toolArgs.registry,
             entry: toolArgs.entry,
+            vault: toolArgs.vault,
           });
           break;
         case "knowledge_write_page":
@@ -369,6 +409,7 @@ function buildServer(): Server {
             commit_message: toolArgs.commit_message,
             pr_title: toolArgs.pr_title,
             pr_body: toolArgs.pr_body,
+            vault: toolArgs.vault,
           });
           break;
         default:
@@ -415,7 +456,7 @@ async function startHttp(port: number, host: string): Promise<void> {
       res.end(JSON.stringify({
         status: "ok",
         service: "vault-mcp",
-        version: "0.2.0",
+        version: "0.3.0",
         uptime_seconds: uptime,
         knowledge_service_url: endpoint,
       }));

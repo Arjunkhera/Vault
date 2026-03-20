@@ -9,7 +9,7 @@ Future implementations: ElasticsearchAdapter, DocumentServiceAdapter
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -20,6 +20,7 @@ class SearchResult:
     score: float
     snippet: str
     collection: str
+    id: Optional[str] = field(default=None)  # UUIDv4 of the page; None if not yet resolved
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Document:
     file_path: str
     content: str
     collection: str
+    id: Optional[str] = field(default=None)  # UUIDv4 of the page; None if not yet resolved
 
 
 class SearchStore(ABC):

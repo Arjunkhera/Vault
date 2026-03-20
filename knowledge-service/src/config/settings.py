@@ -35,6 +35,7 @@ class VaultSettings:
     github_token: str = ""
     github_repo: str = ""
     github_base_branch: str = "master"
+    github_api_host: str = ""
 
     # Typesense configuration
     typesense_host: str = "localhost"
@@ -54,6 +55,7 @@ class VaultSettings:
             "log_level",
             "github_repo",
             "github_base_branch",
+            "github_api_host",
             "typesense_host",
             "typesense_port",
         ]:
@@ -98,6 +100,7 @@ def load_settings(
         "github_token": "default",
         "github_repo": "default",
         "github_base_branch": "default",
+        "github_api_host": "default",
         "typesense_host": "default",
         "typesense_port": "default",
         "typesense_api_key": "default",
@@ -131,6 +134,7 @@ def load_settings(
                     "github_token": str,
                     "github_repo": str,
                     "github_base_branch": str,
+                    "github_api_host": str,
                     "typesense_host": str,
                     "typesense_port": int,
                     "typesense_api_key": str,
@@ -177,6 +181,7 @@ def load_settings(
         "GITHUB_TOKEN": ("github_token", str),
         "GITHUB_REPO": ("github_repo", str),
         "GITHUB_BASE_BRANCH": ("github_base_branch", str),
+        "GITHUB_API_HOST": ("github_api_host", str),
         "TYPESENSE_HOST": ("typesense_host", str),
         "TYPESENSE_PORT": ("typesense_port", int),
         "TYPESENSE_API_KEY": ("typesense_api_key", str),

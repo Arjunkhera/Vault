@@ -19,6 +19,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from ..layer1.interface import SearchStore
+from ..layer2.uuid_registry import UUIDRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -26,47 +27,64 @@ logger = logging.getLogger(__name__)
 class ReindexLock:
     """
     Shared lock and state for coordinating re-index operations.
-    
+
     Prevents concurrent re-indexing from git pull loop and file watcher.
     Tracks last re-index time for logging and monitoring.
     """
-    
-    def __init__(self) -> None:
+
+    def __init__(
+        self,
+        uuid_registry: Optional[UUIDRegistry] = None,
+        knowledge_repo_path: Optional[str] = None,
+    ) -> None:
         self.lock = asyncio.Lock()
         self.last_reindex: Optional[datetime] = None
         self.reindex_count = 0
-    
+        self._uuid_registry = uuid_registry
+        self._knowledge_repo_path = knowledge_repo_path
+
     async def reindex(self, store: SearchStore, trigger: str) -> bool:
         """
         Execute re-index with lock protection.
-        
+
+        Rebuilds the UUID registry after a successful store reindex so that
+        UUID → file_path mappings stay in sync.
+
         Args:
             store: SearchStore instance to re-index
             trigger: Description of what triggered the re-index (for logging)
-        
+
         Returns:
             True if re-index was performed, False if skipped (lock held)
         """
         if self.lock.locked():
             logger.debug(f"Re-index already in progress, skipping trigger: {trigger}")
             return False
-        
+
         async with self.lock:
             try:
                 logger.info(f"Starting re-index (trigger: {trigger})...")
                 start_time = datetime.now()
-                
+
                 # Run synchronous store.reindex() in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, store.reindex)
-                
+
+                # Rebuild UUID registry so new/updated pages are discoverable by UUID
+                if self._uuid_registry is not None and self._knowledge_repo_path:
+                    await loop.run_in_executor(
+                        None,
+                        self._uuid_registry.build,
+                        self._knowledge_repo_path,
+                    )
+
                 elapsed = (datetime.now() - start_time).total_seconds()
                 self.last_reindex = datetime.now()
                 self.reindex_count += 1
-                
+
                 logger.info(f"Re-index complete (trigger: {trigger}, elapsed: {elapsed:.2f}s, total: {self.reindex_count})")
                 return True
-                
+
             except Exception as e:
                 logger.error(f"Re-index failed (trigger: {trigger}): {e}", exc_info=True)
                 return False
@@ -311,28 +329,33 @@ async def start_sync_daemon(
     knowledge_repo_path: str,
     workspace_path: str,
     sync_interval: int,
-    debounce_seconds: float = 5.0
+    debounce_seconds: float = 5.0,
+    uuid_registry: Optional[UUIDRegistry] = None,
 ) -> tuple[Optional[asyncio.Task[None]], Optional[Any]]:
     """
     Start both sync daemon components.
-    
+
     Convenience function to start git pull loop and workspace watcher together.
-    
+
     Args:
         store: SearchStore instance
         knowledge_repo_path: Path to knowledge repo
         workspace_path: Path to workspace
         sync_interval: Seconds between git pulls
         debounce_seconds: Seconds to debounce workspace changes
-    
+        uuid_registry: Optional UUIDRegistry to rebuild after each reindex
+
     Returns:
         Tuple of (git_pull_task, workspace_observer)
         Either component may be None if it failed to start
     """
     logger.info("Starting sync daemon...")
-    
-    # Create shared reindex lock
-    reindex_lock = ReindexLock()
+
+    # Create shared reindex lock (with UUID registry for post-reindex rebuild)
+    reindex_lock = ReindexLock(
+        uuid_registry=uuid_registry,
+        knowledge_repo_path=knowledge_repo_path,
+    )
     
     # Start git pull loop as asyncio task
     git_pull_task: asyncio.Task[None] = asyncio.create_task(
