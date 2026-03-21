@@ -28,8 +28,6 @@ services:
       - KNOWLEDGE_REPO_URL=${KNOWLEDGE_REPO_URL:-}
       # Optional: skip automatic git clone
       - SKIP_GIT_CLONE=${SKIP_GIT_CLONE:-false}
-      # Optional: QMD index name (default: knowledge)
-      - QMD_INDEX_NAME=${QMD_INDEX_NAME:-knowledge}
       # Optional: sync interval in seconds (default: 300)
       - SYNC_INTERVAL=${SYNC_INTERVAL:-300}
       # Optional: log level (default: info)

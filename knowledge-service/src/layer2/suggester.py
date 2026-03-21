@@ -565,7 +565,7 @@ class MetadataSuggester:
                     related.append(link)
 
         conf = "medium" if related else "none"
-        reason = f"QMD search found {len(related)} page(s) with overlapping content" if related else "No similar pages found"
+        reason = f"Search found {len(related)} page(s) with overlapping content" if related else "No similar pages found"
         if kb_status == "sparse":
             reason += " (KB is sparse — limited matches)"
 

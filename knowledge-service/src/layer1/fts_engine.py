@@ -1,7 +1,7 @@
 """
 FTS5-based keyword search engine for Vault knowledge pages.
 
-Provides a local fallback when the QMD daemon is unavailable.
+Provides an emergency fallback when Typesense is unavailable.
 Uses SQLite's FTS5 virtual table with BM25 ranking and Porter stemming.
 """
 

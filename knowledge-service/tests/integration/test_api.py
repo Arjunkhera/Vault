@@ -2,7 +2,7 @@
 Integration tests for the Vault Knowledge Service REST API.
 
 Uses FastAPI TestClient with a MockSearchStore to test all 5 endpoints end-to-end.
-Creates a separate FastAPI app without the lifespan (which requires QMD).
+Creates a separate FastAPI app without the lifespan (which requires Typesense/FTS5).
 """
 
 import pytest

@@ -2,7 +2,8 @@
 FastAPI application entry point for Vault Knowledge Service.
 
 Sets up the REST API with:
-- QMD adapter initialization
+- Typesense search client (primary)
+- FTS5 fallback engine (emergency fallback)
 - Collection setup (shared + workspace)
 - Schema loader initialization
 - Health and status endpoints
@@ -24,9 +25,7 @@ from fastapi.responses import JSONResponse
 import os
 
 from .config.settings import load_settings
-from .layer1.qmd_adapter import QMDAdapter
 from .layer1.fts_engine import FtsSearchEngine
-from .layer1.fallback_store import FallbackSearchStore
 from .layer1.typesense_client import TypesenseSearchClient
 from .layer1.indexer import full_reindex
 from .layer2.schema import SchemaLoader
@@ -50,7 +49,7 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for FastAPI app.
 
     Handles startup and shutdown:
-    - Startup: Initialize QMD adapter, setup collections, start sync daemon
+    - Startup: Initialize FTS5 engine, Typesense client, setup collections, start sync daemon
     - Shutdown: Cleanup resources
     """
     # ============================================================================
@@ -64,12 +63,8 @@ async def lifespan(app: FastAPI):
     logger.info("Vault configuration resolved:")
     settings.log_sources(sources)
 
-    # Initialize QMD adapter (primary search engine)
-    logger.info("Initializing QMD adapter...")
-    qmd_adapter = QMDAdapter(index_name=settings.qmd_index_name)
-
-    # Initialize FTS5 fallback engine
-    fts_engine = FtsSearchEngine(
+    # Initialize FTS5 search engine (emergency fallback when Typesense is unavailable)
+    store = FtsSearchEngine(
         db_path=os.path.join(settings.workspace_path, ".vault", "fts5_index.db"),
         collection_paths={
             "shared": settings.knowledge_repo_path,
@@ -77,11 +72,8 @@ async def lifespan(app: FastAPI):
         },
     )
 
-    # Wrap both in a fallback store
-    store = FallbackSearchStore(qmd_adapter, fts_engine)
-
     # Setup collections (idempotent)
-    logger.info("Setting up QMD collections...")
+    logger.info("Setting up collections...")
     try:
         store.ensure_collections(
             shared_path=settings.knowledge_repo_path,
@@ -89,13 +81,13 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Collections setup complete")
     except Exception as e:
-        logger.warning("QMD collection setup failed (non-fatal, FTS5 fallback available): %s", e)
+        logger.warning("Collection setup failed (non-fatal): %s", e)
 
-    # Build initial FTS5 index so fallback is ready immediately
-    logger.info("Building FTS5 fallback index...")
+    # Build initial FTS5 index
+    logger.info("Building FTS5 index...")
     try:
-        fts_engine.reindex()
-        logger.info("FTS5 fallback index ready")
+        store.reindex()
+        logger.info("FTS5 index ready")
     except Exception as e:
         logger.warning("FTS5 index build failed (non-fatal): %s", e)
 
@@ -122,7 +114,7 @@ async def lifespan(app: FastAPI):
     # Store Typesense client in app state
     app.state.typesense_client = ts_client
 
-    # Store fallback store in app state for dependency injection
+    # Store FTS5 engine in app state for dependency injection
     app.state.store = store
 
     # Store settings in app state for dependency injection (write-path operations)
@@ -281,8 +273,8 @@ app.include_router(router, prefix="", tags=["knowledge"])
 @app.get("/health")
 async def health_check():
     """
-    Lightweight health check — no QMD subprocess, no I/O.
-    Use GET /status for full QMD index diagnostics.
+    Lightweight health check — no I/O.
+    Use GET /status for full index diagnostics.
     """
     return {"status": "ok", "service": "knowledge-service", "version": "0.1.0"}
 
@@ -290,12 +282,12 @@ async def health_check():
 @app.get("/status")
 async def full_status(request: Request):
     """
-    Full QMD index status (slow — spawns qmd subprocess).
+    Full index status including Typesense and FTS5 health.
     Separated from /health so liveness probes stay fast.
     """
     try:
         store = request.app.state.store
-        index_status = await asyncio.to_thread(store.status)
+        fts_status = await asyncio.to_thread(store.status)
 
         # Include Typesense health if client is available
         typesense_status = None
@@ -307,7 +299,7 @@ async def full_status(request: Request):
             "status": "ok",
             "service": "knowledge-service",
             "version": "0.1.0",
-            "index": index_status,
+            "fts5": fts_status,
         }
         if typesense_status is not None:
             response_content["typesense"] = typesense_status

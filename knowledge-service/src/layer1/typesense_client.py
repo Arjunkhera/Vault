@@ -2,7 +2,7 @@
 Typesense search client for Vault Knowledge Service.
 
 Provides a unified search interface using Typesense as the search backend.
-Replaces the FallbackSearchStore/QMD/FTS5 chain with deterministic,
+Provides deterministic,
 faceted search via Typesense's built-in filter_by and sort_by capabilities.
 
 The client:
