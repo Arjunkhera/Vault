@@ -193,7 +193,7 @@ async def resolve_context(
             continue
         entry = data.get("entry_point")
         if entry:
-            score = entry.get("relevance_score", 0.0)
+            score = entry.get("relevance_score") or 0.0
             if score > best_score:
                 best_score = score
                 best_entry = {**entry, "source_vault": vault_name}
