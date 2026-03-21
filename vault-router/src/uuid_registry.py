@@ -134,11 +134,11 @@ class CrossVaultUUIDRegistry:
 
         while True:
             url = f"{base_url.rstrip('/')}/list-by-scope"
-            response = await client.post(url, json={"limit": limit, "offset": offset})
+            response = await client.post(url, json={"scope": {}, "limit": limit, "offset": offset})
             response.raise_for_status()
             data = response.json()
 
-            results = data.get("results", [])
+            results = data.get("pages", data.get("results", []))
             for page in results:
                 page_id = page.get("id")
                 if page_id:
