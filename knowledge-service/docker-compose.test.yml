@@ -12,7 +12,6 @@ services:
       - KNOWLEDGE_REPO_PATH=/data/knowledge-repo
       - WORKSPACE_PATH=/workspace
       - SYNC_INTERVAL=300
-      - QMD_INDEX_NAME=knowledge
       # Skip git clone since we're mounting the repo directly
       - SKIP_GIT_CLONE=true
     restart: unless-stopped

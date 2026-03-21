@@ -147,8 +147,7 @@ UUIDRegistryDepends = Annotated[UUIDRegistry, Depends(get_uuid_registry)]
 # ============================================================================
 # Synchronous handler implementations.
 # Each is called via asyncio.to_thread() from the async route handler so that
-# blocking subprocess.run() calls inside the QMD adapter do not starve the
-# uvicorn event loop.
+# blocking I/O (SQLite, Typesense HTTP) does not starve the uvicorn event loop.
 # ============================================================================
 
 def _resolve_context_sync(
@@ -361,14 +360,14 @@ def _search_sync(
 
 
 def _search_fallback_sync(request: SearchRequest, store: SearchStore) -> SearchResponse:
-    """Fallback search using old QMD/FTS5 path when Typesense is unavailable."""
+    """Fallback search using FTS5 when Typesense is unavailable."""
     search_results = store.search(request.query, limit=request.limit * 2)
     doc_cache = store.get_all_documents()
 
     if not search_results and not doc_cache:
         logger.error(
             "Search returned zero results AND doc_cache is empty for query '%s'. "
-            "Both QMD and FTS5 fallback may be non-functional. "
+            "FTS5 fallback may be non-functional. "
             "Store status: %s",
             request.query,
             store.status() if hasattr(store, "status") else "unknown",
@@ -416,7 +415,7 @@ async def search(
     Full-text search with progressive disclosure.
 
     Queries Typesense with automatic source:=vault filter.
-    Falls back to QMD/FTS5 if Typesense is unavailable.
+    Falls back to FTS5 if Typesense is unavailable.
     Returns PageSummary objects (descriptions only) to enable filtering.
     """
     return await asyncio.to_thread(_search_sync, request, store, ts_client)

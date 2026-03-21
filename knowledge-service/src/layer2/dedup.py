@@ -40,7 +40,7 @@ class DuplicateChecker:
     """
     Checks candidate page content against existing KB pages for overlap.
 
-    Uses QMD hybrid search (BM25 + vector + LLM reranking) with a two-query
+    Uses hybrid search (BM25 + semantic) with a two-query
     strategy: one search by title, one by body excerpt. The higher score wins.
     """
 

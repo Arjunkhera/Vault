@@ -78,7 +78,6 @@ log "Log level: $LOG_LEVEL"
 if [ "$HORUS_RUNTIME" = "podman" ]; then
   chown -R appuser:appuser /data/knowledge-repo 2>/dev/null || true
   chown -R appuser:appuser /data/workspace 2>/dev/null || true
-  chown -R appuser:appuser /home/appuser/.cache/qmd 2>/dev/null || true
   git config --global --replace-all safe.directory '*'
 fi
 

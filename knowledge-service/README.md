@@ -1,6 +1,6 @@
 # Vault Knowledge Service
 
-A centralized, agent-oriented knowledge layer for Intuit, exposing a comprehensive REST API with QMD-powered search, scope-chain resolution, and write-path validation. Deployed as a Docker container.
+A centralized, agent-oriented knowledge layer, exposing a comprehensive REST API with Typesense-powered search, scope-chain resolution, and write-path validation. Deployed as a Docker container.
 
 ## Overview
 
@@ -23,7 +23,8 @@ knowledge-service/
 │   │   └── settings.py        # Configuration loader (file + env + CLI)
 │   ├── layer1/
 │   │   ├── interface.py       # Abstract SearchStore interface
-│   │   └── qmd_adapter.py     # QMD search implementation
+│   │   ├── typesense_client.py # Typesense search (primary)
+│   │   └── fts_engine.py      # FTS5 search (fallback)
 │   ├── layer2/
 │   │   ├── frontmatter.py     # YAML frontmatter parsing
 │   │   ├── scope.py           # Scope-chain resolution (program + repo)
@@ -51,7 +52,6 @@ Vault loads configuration with precedence: **CLI args > environment variables > 
 ```yaml
 knowledge_repo_path: "/path/to/knowledge-base"
 workspace_path: "/path/to/workspace"
-qmd_index_name: "knowledge"
 sync_interval: 300
 port: 8000
 host: "0.0.0.0"
@@ -64,7 +64,6 @@ log_level: "info"
 |----------|---------|-------------|
 | `KNOWLEDGE_REPO_PATH` | `/data/knowledge-repo` | Path to cloned knowledge repository |
 | `WORKSPACE_PATH` | `/workspace` | Path to Anvil workspace (read-only) |
-| `QMD_INDEX_NAME` | `knowledge` | QMD index name |
 | `SYNC_INTERVAL` | `300` | Git pull interval in seconds (5 min) |
 | `VAULT_PORT` | `8000` | REST API port |
 | `VAULT_HOST` | `0.0.0.0` | REST API host |
